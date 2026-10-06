@@ -2,7 +2,7 @@
  * MVZ Plugin - Settings pane controller
  * (SPECIFICATION_MVZ1_PLUGIN.md > "Preferences (Settings)")
  *
- * Loaded as a <script> by content/settings.xhtml. Runs in the Zotero
+ * Loaded as a <script> by content/preferences.xhtml. Runs in the Zotero
  * preferences window, where `Zotero` and `window` are both available.
  */
 
@@ -79,6 +79,13 @@
 		const currentStyle = Core.getPref('targetDocument.style', 'apa');
 		styleRadios.forEach(function (r) { r.checked = (r.value === currentStyle); });
 		customFields.hidden = currentStyle !== 'custom';
+		const includeOriginal = Core.getPref('targetDocument.includeOriginal', true);
+		root.querySelectorAll('input[name="mvz-include-original"]').forEach(function (r) {
+			r.checked = r.value === String(includeOriginal);
+			r.addEventListener('change', function () {
+				if (r.checked) Core.setPref('targetDocument.includeOriginal', r.value === 'true');
+			});
+		});
 		standaloneEl.value = Core.getPref('targetDocument.customTemplateStandalone', '');
 		containedEl.value = Core.getPref('targetDocument.customTemplateContained', '');
 
@@ -107,29 +114,25 @@
 		const body = root.querySelector('#mvz-field-matrix-body');
 		const matrix = Core.getFieldInclusionMatrix();
 		const locale = CommonUI.uiLocale();
+		const grouped = new Map();
 
-		function labelFor(row) {
-			if (row.key === 'creator') return I18n.t('MVZ_FIELD_MATRIX_ALL_CREATORS');
-			return I18n.resolveField(row.labelField);
-		}
-
-		const rows = [{ key: 'creator', labelField: null }].concat(Core.FIELD_CATALOG);
-		const sortedRows = rows
-			.map(function (r) { return { row: r, label: labelFor(r) }; })
-			.sort(function (a, b) {
-				if (a.row.key === 'creator') return -1; // Creators row always first, per the specification's own table.
-				if (b.row.key === 'creator') return 1;
-				return a.label.localeCompare(b.label, locale);
+		Core.FIELD_CATALOG.forEach(function (row) {
+			row.fields.forEach(function (field) {
+				const label = I18n.resolveField(field);
+				if (!grouped.has(label)) grouped.set(label, { key: field, fields: [], label: label });
+				grouped.get(label).fields.push(field);
 			});
+		});
 
-		sortedRows.forEach(function (entry) {
-			const key = entry.row.key;
+		const sortedRows = [{ key: 'creator', fields: ['creator'], label: I18n.t('MVZ_FIELD_MATRIX_ALL_CREATORS') }]
+			.concat(Array.from(grouped.values()).sort(function (a, b) { return a.label.localeCompare(b.label, locale); }));
+
+		sortedRows.forEach(function (row) {
+			const key = row.key;
 			const prefs = matrix[key] || { original: true, transliteration: false, translation: false };
-
 			const tr = el('tr');
-
 			const th = el('th');
-			th.textContent = entry.label;
+			th.textContent = row.label;
 			tr.appendChild(th);
 
 			['original', 'transliteration', 'translation'].forEach(function (col) {
@@ -144,21 +147,18 @@
 						prefs.transliteration = col === 'transliteration';
 						prefs.translation = col === 'translation';
 					} else {
-						prefs[col] = input.checked;
-						// "Tick at least one in each row" - prevent unchecking the
-						// last remaining tick.
-						if (!prefs.original && !prefs.transliteration && !prefs.translation) {
-							prefs[col] = true;
-							input.checked = true;
-						}
+					prefs[col] = input.checked;
+					if (!prefs.original && !prefs.transliteration && !prefs.translation) {
+						prefs[col] = true;
+						input.checked = true;
 					}
-					matrix[key] = prefs;
+					}
+					row.fields.forEach(function (field) { matrix[field] = Object.assign({}, prefs); });
 					Core.setFieldInclusionMatrix(matrix);
 				});
 				td.appendChild(input);
 				tr.appendChild(td);
 			});
-
 			body.appendChild(tr);
 		});
 	}

@@ -44,6 +44,7 @@ Zotero.MVZ.I18n = (function () {
 		MVZ_DUPLICATE_VARIANT: { field_name: 'field', language_tag: 'literal' },
 		MVZ_BASE_FIELD: { base_field_name: 'field' },
 		MVZ_VARIANT: { language_tag: 'literal' },
+		MVZ_VARIANTS_UNAVAILABLE: { field_name: 'literal' },
 		MVZ_CREATOR_FIELD_LABEL: { this_creator_index: 'index' },
 		MVZ_FIELD_BLANK_TOOLTIP: { field_name: 'field' },
 		MVZ_CREATOR_SYNC_ERROR_BODY: { error_message: 'literal' },
@@ -67,6 +68,33 @@ Zotero.MVZ.I18n = (function () {
 			_l10n = null;
 		}
 		return _l10n;
+	}
+
+	let _fallbackMessages = null;
+
+	function fallbackMessages() {
+		if (_fallbackMessages) return _fallbackMessages;
+		_fallbackMessages = {};
+		const locale = Zotero.locale || 'en-GB';
+		const candidates = [locale, 'en-GB'];
+		candidates.forEach(function (candidate) {
+			try {
+				const text = Zotero.File.getContentsFromURL('chrome://mvz/locale/' + candidate + '/mvz.ftl');
+				String(text || '').split(/\r?\n/).forEach(function (line) {
+					const match = /^([A-Z][A-Z0-9_-]*)\s*=\s*(.*)$/.exec(line);
+					if (match && !_fallbackMessages[match[1]]) _fallbackMessages[match[1]] = match[2];
+				});
+			} catch (e) {}
+		});
+		return _fallbackMessages;
+	}
+
+	function fallbackValue(token, args) {
+		const template = fallbackMessages()[token];
+		if (!template) return token;
+		return template.replace(/\{\s*\$([A-Za-z0-9_]+)\s*\}/g, function (match, name) {
+			return Object.prototype.hasOwnProperty.call(args, name) ? String(args[name]) : match;
+		});
 	}
 
 	// --- Database-element resolution (Locale file precedence) --------------
@@ -128,14 +156,14 @@ Zotero.MVZ.I18n = (function () {
 			});
 		}
 
-		if (!l10n) return token; // Defensive fallback - never throw into the UI.
+		if (!l10n) return fallbackValue(token, args); // Defensive fallback - never throw into the UI.
 
 		try {
 			const value = l10n.formatValueSync(token, args);
-			return value === null || value === undefined ? token : value;
+			return value === null || value === undefined || value === token ? fallbackValue(token, args) : value;
 		} catch (e) {
 			Zotero.logError(e);
-			return token;
+			return fallbackValue(token, args);
 		}
 	}
 

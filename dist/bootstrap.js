@@ -58,7 +58,7 @@ function registerChromeAndLocale(rootURI) {
 	chromeHandle = aomStartup.registerChrome(manifestURI, chromeEntries);
 
 	// Register the Fluent source so `new Localization(['mvz.ftl'])` (see
-	// mvz-i18n.js) and any `data-l10n-id` bindings in settings.xhtml can
+	// mvz-i18n.js) and any `data-l10n-id` bindings in preferences.xhtml can
 	// resolve MVZ messages, in the Zotero UI's current locale.
 	try {
 		const { L10nRegistry, L10nFileSource } = ChromeUtils.importESModule('resource://gre/modules/L10nRegistry.sys.mjs');
@@ -109,17 +109,17 @@ async function startup({ id, version, rootURI }) {
 		try {
 			// BUG FIX (TEST_REPORT_Alpha.1.md, "Settings ... Does not display
 			// MVZ preferences at all"): a <script src="..."> tag embedded in
-			// the settings.xhtml fragment does NOT execute - Zotero loads
+			// the preferences.xhtml fragment does NOT execute - Zotero loads
 			// `src` as an inert markup fragment and inserts it into the
 			// preferences document, which never runs embedded <script>
 			// elements. The `scripts` option below is the mechanism Zotero
 			// actually provides for attaching pane behaviour; the inline
-			// <script> tag has been removed from settings.xhtml.
+			// <script> tag has been removed from preferences.xhtml.
 			await Zotero.PreferencePanes.register({
 				pluginID: PLUGIN_ID,
-				src: 'chrome://mvz/content/settings.xhtml',
+				src: 'chrome://mvz/content/preferences.xhtml',
 				scripts: ['chrome://mvz/content/mvz-prefs.js'],
-				stylesheets: ['chrome://mvz/content/mvz-settings.css'],
+				stylesheets: ['chrome://mvz/content/mvz-preferences.css'],
 				label: 'MVZ Plugin',
 				image: 'chrome://mvz/content/icon.png'
 			});

@@ -21,6 +21,7 @@
 // Target document characteristics.
 pref("extensions.mvz.targetDocument.language", "");
 pref("extensions.mvz.targetDocument.style", "apa");
+pref("extensions.mvz.targetDocument.includeOriginal", true);
 pref("extensions.mvz.targetDocument.customTemplateStandalone", "");
 pref("extensions.mvz.targetDocument.customTemplateContained", "");
 

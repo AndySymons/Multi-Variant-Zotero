@@ -297,6 +297,10 @@ Zotero.MVZ.CommonUI = (function () {
 				const label = el(doc, 'span');
 				label.className = 'mvz-tag-list-label';
 				label.textContent = tag;
+				if (options.mode === 'language' && !Core.isValidItemLanguageTag(tag)) {
+					label.classList.add('mvz-tag-invalid');
+					label.title = Zotero.MVZ.I18n.t('MVZ_LANGUAGE_UNRECOGNIZED');
+				}
 				label.addEventListener('click', function () {
 					Zotero.MVZ.CommonUI.openTagEditor(doc, { mode: options.mode, excludeCodes: items.filter(function (_, i) { return i !== index; }) })
 						.then(function (newTag) {

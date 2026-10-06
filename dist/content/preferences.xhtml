@@ -9,7 +9,7 @@
   sidebar items, no native multi-pane APIs).
 -->
 <div xmlns="http://www.w3.org/1999/xhtml" id="mvz-settings-root">
-	<link rel="stylesheet" href="chrome://mvz/content/mvz-settings.css" />
+	<link rel="stylesheet" href="chrome://mvz/content/mvz-preferences.css" />
 
 	<div class="mvz-tab-bar">
 		<button type="button" class="mvz-tab-button" data-tab="targetDocument" data-l10n-id="MVZ_TAB_TARGET_DOCUMENT"></button>
@@ -65,13 +65,15 @@
 
 	<!-- Tab 3: Script and language drop downs -->
 	<div class="mvz-tab-panel" data-tab-panel="scriptLanguageLists" hidden="hidden">
-		<section>
-			<label data-l10n-id="MVZ_SCRIPT_SHORTLIST_LABEL"></label>
-			<div id="mvz-script-shortlist"></div>
-		</section>
-		<section>
-			<label data-l10n-id="MVZ_LANGUAGE_SHORTLIST_LABEL"></label>
-			<div id="mvz-language-shortlist"></div>
-		</section>
+		<div class="mvz-shortlist-preferences">
+			<section>
+				<label data-l10n-id="MVZ_SCRIPT_SHORTLIST_LABEL"></label>
+				<div id="mvz-script-shortlist"></div>
+			</section>
+			<section>
+				<label data-l10n-id="MVZ_LANGUAGE_SHORTLIST_LABEL"></label>
+				<div id="mvz-language-shortlist"></div>
+			</section>
+		</div>
 	</div>
 </div>

@@ -6,7 +6,7 @@
  *   - the MVZ version string (Versioning & Build Identification Rules)
  *   - the field catalog (Appendix 2 - fields that can have variants)
  *   - the Extra-field MVZ tag parser/serialiser (Appendix 3)
- *   - the item Language field cleaner (Common UI > Language field cleaner)
+ *   - item Language-field BCP-47 validation (Common UI > Language field popup)
  *   - preference accessors
  *   - a small debounce helper (MVZ pane > Synchronisation, "300ms debounce")
  */
@@ -15,7 +15,7 @@
 
 if (!Zotero.MVZ) Zotero.MVZ = {};
 
-Zotero.MVZ.VERSION = '1.0.0-alpha.2';
+Zotero.MVZ.VERSION = '1.0.0-alpha.3';
 
 Zotero.MVZ.Core = (function () {
 	'use strict';
@@ -112,7 +112,7 @@ Zotero.MVZ.Core = (function () {
 	}
 
 	function rowKeyForField(fieldName) {
-		return FIELD_TO_ROW[fieldName] || null;
+		return isVariantField(fieldName) ? fieldName : null;
 	}
 
 	function isContainedItemType(itemType) {
@@ -142,12 +142,12 @@ Zotero.MVZ.Core = (function () {
 	// -----------------------------------------------------------------
 	// Extra field MVZ tag parsing / serialisation (Appendix 3)
 	//
-	// Line syntax: mvz/<l|s>/<body>/<suffix>: <value>
+	// Line syntax: mvz/<body>/<v_index>/<L|S>/<suffix>: <value>
 	//   body   = camelCase field name, or creator[<n>]
 	//   suffix = a BCP-47-like tag (incl. optional -t-/-m0- extensions)
 	// -----------------------------------------------------------------
 
-	const MVZ_LINE_RE = /^mvz\/(l|s)\/([^/]+)\/([^:]+):[ ](.*)$/;
+	const MVZ_LINE_RE = /^mvz\/([^/]+)\/(\d+)\/([LS])\/([^:]+):[ ](.*)$/;
 	const CREATOR_BODY_RE = /^creator\[(\d+)\]$/;
 
 	/**
@@ -172,12 +172,13 @@ Zotero.MVZ.Core = (function () {
 				// regenerated from the MVZ pane's in-memory state on next write.
 				return;
 			}
-			const [, type, body, tag, value] = m;
+			const [, body, vIndex, type, tag, value] = m;
 			const creatorMatch = CREATOR_BODY_RE.exec(body);
 			variants.push({
-				type: type, // 'l' or 's'
+				type: type === 'L' ? 'l' : 's',
 				field: creatorMatch ? null : body,
 				creatorIndex: creatorMatch ? parseInt(creatorMatch[1], 10) : null,
+				variantIndex: parseInt(vIndex, 10),
 				tag: tag,
 				value: value
 			});
@@ -200,11 +201,14 @@ Zotero.MVZ.Core = (function () {
 	 * @returns {string}
 	 */
 	function serializeExtra(preservedText, variants) {
+		const indexes = new Map();
 		const mvzLines = variants.map(function (v) {
 			const body = v.creatorIndex !== null && v.creatorIndex !== undefined
 				? 'creator[' + v.creatorIndex + ']'
 				: v.field;
-			return 'mvz/' + v.type + '/' + body + '/' + v.tag + ': ' + v.value;
+			const vIndex = indexes.get(body) || 0;
+			indexes.set(body, vIndex + 1);
+			return 'mvz/' + body + '/' + vIndex + '/' + v.type.toUpperCase() + '/' + v.tag + ': ' + v.value;
 		});
 
 		const trimmed = (preservedText || '').replace(/\n+$/, '');
@@ -278,7 +282,14 @@ Zotero.MVZ.Core = (function () {
 	}
 
 	function getFieldInclusionMatrix() {
-		return getJSONPref('fieldInclusion', {});
+		const stored = getJSONPref('fieldInclusion', {});
+		const matrix = Object.assign({}, stored);
+		FIELD_CATALOG.forEach(function (row) {
+			row.fields.forEach(function (field) {
+				if (!matrix[field]) matrix[field] = stored[row.key] || { original: true, transliteration: false, translation: false };
+			});
+		});
+		return matrix;
 	}
 
 	function setFieldInclusionMatrix(matrix) {
@@ -286,130 +297,50 @@ Zotero.MVZ.Core = (function () {
 	}
 
 	// -----------------------------------------------------------------
-	// Item Language field cleaner
-	// (Common UI > Script/language tag editor > The item Language field
-	// cleaner > Language field extraction algorithm)
+	// Item Language field validation
+	// (Common UI > Language field popup; invalid BCP-47 strings remain unchanged)
 	// -----------------------------------------------------------------
 
-	let _languageNameIndex = null; // locale -> { name.toLowerCase(): code }
-
-	function buildLanguageNameIndex(locale) {
-		if (_languageNameIndex && _languageNameIndex.locale === locale) {
-			return _languageNameIndex.map;
-		}
-		const map = {};
-		try {
-			const dn = new Intl.DisplayNames([locale], { type: 'language' });
-			Zotero.MVZ.BCP47.allLanguages().forEach(function (code) {
-				try {
-					const name = dn.of(code);
-					if (name) map[name.toLowerCase()] = code;
-				} catch (e) {
-					// Some registry codes are not valid Intl.DisplayNames subtags
-					// (e.g. collective/historical codes) - skip them defensively.
-				}
-			});
-		} catch (e) {
-			Zotero.logError(e);
-		}
-		_languageNameIndex = { locale: locale, map: map };
-		return map;
-	}
-
 	/**
-	 * Attempt to resolve a single candidate phrase (one or more words) to a
-	 * BCP-47 tag, either because it already looks like one, or because it
-	 * matches a known language display name.
-	 * @returns {string|null} normalised BCP-47 tag, or null on failure.
+	 * Validate a single BCP-47 code without resolving language names or near matches.
+	 * @returns {string|null} formatted BCP-47 tag, or null on failure.
 	 */
-	function resolveCandidate(phrase, locale) {
-		// 1. Does it already look like a BCP-47 code (contains a hyphen, or is
-		// a bare 2/3-letter code)? Validate via the subtag registry.
-		if (/^[A-Za-z]{2,3}(-[A-Za-z0-9]+)*$/.test(phrase)) {
-			const parsed = Zotero.MVZ.BCP47.parseTag(phrase);
-			if (parsed.valid) return Zotero.MVZ.BCP47.formatTag(parsed);
-		}
-		// 2. Does it match a known language display name (case-insensitive)?
-		const index = buildLanguageNameIndex(locale);
-		const code = index[phrase.toLowerCase()];
-		if (code) return Zotero.MVZ.BCP47.formatTag(Zotero.MVZ.BCP47.parseTag(code));
-		return null;
+	function resolveCandidate(phrase) {
+		if (!isValidItemLanguageTag(phrase)) return null;
+		return Zotero.MVZ.BCP47.formatTag(Zotero.MVZ.BCP47.parseTag(String(phrase).trim()));
 	}
 
 	/**
-	 * Language field extraction algorithm (GLOSSARY.md / SPECIFICATION
-	 * "Language field extraction algorithm"). Normalises the free-text
-	 * Language field into a clean, comma-separated list of BCP-47 tags.
+	 * Check a comma-separated Language field without rewriting invalid values.
 	 *
 	 * @param {string} rawText
-	 * @param {string} [locale] UI locale for language-name matching; defaults
-	 *   to the current Zotero UI locale.
+	 * @param {string} [locale] retained for compatibility.
 	 * @returns {{ normalized: string, anomalies: Array<{token: string, kind: string}> }}
 	 */
 	function cleanLanguageField(rawText, locale) {
-		locale = locale || Zotero.locale || 'en-US';
-		const anomalies = [];
-
-		if (!rawText || !rawText.trim()) {
-			return { normalized: '', anomalies: anomalies };
-		}
-
-		// 1. Normalise punctuation: split on , ; / | as hard boundaries. Do NOT
-		// split on '-', '_' or parentheses.
-		const segments = rawText.split(/[,;/|]/);
-
-		const results = [];
-
-		segments.forEach(function (segment) {
-			const trimmed = segment.trim();
-			if (!trimmed) return;
-
-			// 2. Split word boundaries.
-			const tokens = trimmed.split(/\s+/).filter(Boolean);
-
-			// 3. Greedy right-to-left windowed matching.
-			let pos = 0;
-			while (pos < tokens.length) {
-				let w = Math.min(tokens.length - pos, 4);
-				let matched = null;
-				while (w >= 1) {
-					const candidate = tokens.slice(pos, pos + w).join(' ');
-					const resolved = resolveCandidate(candidate, locale);
-					if (resolved) {
-						matched = { tag: resolved, width: w, candidate: candidate };
-						break;
-					}
-					w--;
-				}
-				if (matched) {
-					// Flag as a "normalised language" anomaly if the matched phrase
-					// was not already an exact BCP-47-looking token (i.e. it was
-					// resolved via a display name lookup, not a literal code).
-					const wasLiteralCode = /^[A-Za-z]{2,3}(-[A-Za-z0-9]+)*$/.test(matched.candidate)
-						&& Zotero.MVZ.BCP47.parseTag(matched.candidate).valid;
-					if (!wasLiteralCode) {
-						anomalies.push({ token: matched.candidate, kind: 'normalized-language' });
-					}
-					results.push(matched.tag);
-					pos += matched.width;
-				} else {
-					anomalies.push({ token: tokens[pos], kind: 'unrecognized-language' });
-					pos += 1;
-				}
-			}
-		});
-
-		return { normalized: results.join(', '), anomalies: anomalies };
+		const raw = rawText === null || rawText === undefined ? '' : String(rawText);
+		const anomalies = raw ? raw.split(',').filter(function (part) {
+			return !resolveCandidate(part);
+		}).map(function (part) {
+			return { token: part.trim(), kind: 'unrecognized-language' };
+		}) : [];
+		return { normalized: raw, anomalies: anomalies };
 	}
 
 	/**
 	 * Blank counts as 'clean'. A non-blank Language field is 'clean' only if
 	 * every comma-separated entry already parses as a valid BCP-47 tag.
 	 */
+	function isValidItemLanguageTag(rawTag) {
+		const tag = String(rawTag || '').trim();
+		if (!/^[A-Za-z]{2,8}(?:-[A-Za-z]{4})?(?:-(?:[A-Za-z]{2}|[0-9]{3}))?$/.test(tag)) return false;
+		return Zotero.MVZ.BCP47.parseTag(tag).valid;
+	}
+
 	function isLanguageFieldClean(rawText) {
-		if (!rawText || !rawText.trim()) return true;
-		return rawText.split(',').every(function (part) {
-			return Zotero.MVZ.BCP47.parseTag(part.trim()).valid;
+		if (!rawText || !String(rawText).trim()) return true;
+		return String(rawText).split(',').every(function (part) {
+			return isValidItemLanguageTag(part);
 		});
 	}
 
@@ -432,6 +363,7 @@ Zotero.MVZ.Core = (function () {
 		getFieldInclusionMatrix: getFieldInclusionMatrix,
 		setFieldInclusionMatrix: setFieldInclusionMatrix,
 		cleanLanguageField: cleanLanguageField,
+		isValidItemLanguageTag: isValidItemLanguageTag,
 		isLanguageFieldClean: isLanguageFieldClean
 	};
 })();

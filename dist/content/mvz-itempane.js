@@ -3,15 +3,9 @@
  * (SPECIFICATION_MVZ1_PLUGIN.md > "MVZ pane layout and interaction",
  * "Creator listener", "Extra field popup", "Language field popup")
  *
- * KNOWN FRAGILE INTEGRATION POINT: the Extra-field and Language-field popups
- * (below) attach focus/blur listeners to Zotero's *native* main item pane
- * fields by probing a handful of plausible selectors for those rows. Zotero
- * 7/10's main pane markup for these rows was not available to verify
- * empirically in this workspace (no live Zotero install). If the selectors
- * below don't match in a real install, `_findFieldRow()` logs a one-time
- * console warning - the developer should inspect the live DOM (e.g. via
- * the browser toolbox) and report back the correct selector/attribute so
- * this can be corrected (AGENT_RULES "Discovery rules").
+ * The Extra-field and Language-field listeners use Zotero 10 Info-pane
+ * markup verified through the Zotero Developer > Run JavaScript DOM query:
+ * editable-text[fieldname="extra|language"] inside .meta-row.
  */
 
 /* global Zotero */
@@ -58,34 +52,117 @@ Zotero.MVZ.ItemPane = (function () {
 		saveState(item, state);
 	}, 300);
 
+	function openVariantShortlist(doc, onSelect) {
+		const overlay = el(doc, 'div');
+		overlay.className = 'mvz-modal-overlay';
+		const dialog = el(doc, 'div');
+		dialog.className = 'mvz-modal-dialog mvz-shortlist-dialog';
+		const columns = el(doc, 'div');
+		columns.className = 'mvz-shortlist-columns';
+		const lists = [
+			{ type: 'l', token: 'MVZ_SHORTLIST_L_LABEL', values: Core.getJSONPref('languageShortlist', []) },
+			{ type: 's', token: 'MVZ_SHORTLIST_S_LABEL', values: Core.getJSONPref('scriptShortlist', []) }
+		];
+		let count = 0;
+		lists.forEach(function (entry) {
+			const column = el(doc, 'div');
+			const heading = el(doc, 'h4');
+			heading.textContent = I18n.t(entry.token);
+			column.appendChild(heading);
+			entry.values.forEach(function (value) {
+				const tag = typeof value === 'string' ? value : value.tag;
+				if (!tag) return;
+				count++;
+				const option = el(doc, 'button');
+				option.type = 'button';
+				option.textContent = tag;
+				option.addEventListener('click', function () {
+					overlay.remove();
+					onSelect(entry.type, tag);
+				});
+				column.appendChild(option);
+			});
+			columns.appendChild(column);
+		});
+		if (!count) {
+			const empty = el(doc, 'p');
+			empty.textContent = I18n.t('MVZ_SHORTLIST_EMPTY');
+			dialog.appendChild(empty);
+		} else {
+			dialog.appendChild(columns);
+		}
+		const help = el(doc, 'p');
+		help.textContent = I18n.t('MVZ_SHORTLIST_EDIT_PREFS');
+		dialog.appendChild(help);
+		overlay.appendChild(dialog);
+		overlay.addEventListener('click', function (event) {
+			if (event.target === overlay) overlay.remove();
+		});
+		doc.documentElement.appendChild(overlay);
+	}
+
 	function variantsFor(state, field, creatorIndex) {
 		return state.variants.filter(function (v) {
 			if (creatorIndex !== undefined && creatorIndex !== null) return v.creatorIndex === creatorIndex;
 			return v.field === field;
+		}).sort(function (a, b) {
+			return (a.variantIndex || 0) - (b.variantIndex || 0);
 		});
 	}
 
 	// -----------------------------------------------------------------
-	// Ordered list of variant-capable fields for an item (Appendix 2,
+	// Ordered list of fields for an item (Appendix 2,
 	// "same order as Zotero shows them in the main item pane").
 	// -----------------------------------------------------------------
 
-	function orderedVariantFieldsForItem(item) {
+	function orderedFieldsForItem(item) {
 		try {
 			const itemTypeID = Zotero.ItemTypes.getID(item.itemType);
 			const fieldIDs = Zotero.ItemFields.getItemTypeFields(itemTypeID);
 			const ordered = fieldIDs
 				.map(function (id) { return Zotero.ItemFields.getName(id); })
-				.filter(function (name) { return Core.isVariantField(name); });
+				.filter(function (name) { return name !== 'extra'; });
 			if (ordered.length) return ordered;
 		} catch (e) {
 			Zotero.logError(e);
 		}
-		// Defensive fallback: catalog declaration order, restricted to fields
-		// that actually have a getField() result for this item type.
 		return Core.VARIANT_FIELDS.filter(function (name) {
 			try { return item.getField(name) !== undefined; } catch (e) { return false; }
 		});
+	}
+
+	function orderedInfoEntries(item, doc, creatorCount) {
+		const entries = [];
+		const seen = new Set();
+		function add(entry) {
+			const key = entry.kind + ':' + (entry.kind === 'field' ? entry.name : entry.index);
+			if (seen.has(key)) return;
+			seen.add(key);
+			entries.push(entry);
+		}
+		const table = doc.querySelector('#info-table');
+		if (table) {
+			table.querySelectorAll('.meta-row').forEach(function (row) {
+				let creatorIndex = null;
+				row.querySelectorAll('[autocompletesearchparam]').forEach(function (control) {
+					try {
+						const data = JSON.parse(control.getAttribute('autocompletesearchparam'));
+						const match = /^creator-(\d+)-/.exec(data.fieldName || '');
+						if (match) creatorIndex = parseInt(match[1], 10);
+					} catch (e) { Zotero.logError(e); }
+				});
+				if (creatorIndex !== null && creatorIndex < creatorCount) {
+					add({ kind: 'creator', index: creatorIndex });
+					return;
+				}
+				const label = row.querySelector('.meta-label[fieldname]');
+				const fieldName = label && label.getAttribute('fieldname');
+				if (fieldName && fieldName !== 'extra') add({ kind: 'field', name: fieldName });
+			});
+		}
+		orderedFieldsForItem(item).forEach(function (name) { add({ kind: 'field', name: name }); });
+		for (let index = 0; index < creatorCount; index++) add({ kind: 'creator', index: index });
+		return entries;
 	}
 
 	// -----------------------------------------------------------------
@@ -98,7 +175,7 @@ Zotero.MVZ.ItemPane = (function () {
 
 	function renderVariantRow(doc, container, options) {
 		// options: { labelText, baseValueText, baseValueBlank, variants,
-		//   onAddLanguage, onAddScript, onEditVariant(variant, newValue),
+		//   onLabelContextMenu, onBaseValueEdit, onEditVariant(variant, newValue),
 		//   onDeleteVariant(variant), onChangeVariantTag(variant) }
 		const group = el(doc, 'div');
 		group.className = 'mvz-field-group' + (options.baseValueBlank ? ' mvz-blank' : '');
@@ -110,16 +187,60 @@ Zotero.MVZ.ItemPane = (function () {
 			const label = el(doc, 'span');
 			label.className = 'mvz-row-label';
 			label.textContent = labelText || '';
+			if (rowOptions && rowOptions.onLabelContextMenu) {
+				label.addEventListener('contextmenu', function (event) {
+					event.preventDefault();
+					event.stopPropagation();
+					rowOptions.onLabelContextMenu(event);
+				});
+			}
+			if (rowOptions && rowOptions.onLabelClick) label.addEventListener('click', rowOptions.onLabelClick);
 			r.appendChild(label);
 
-			const value = el(doc, 'span');
-			value.className = 'mvz-row-value';
-			value.textContent = valueText || '';
-			if (rowOptions && rowOptions.onValueClick) {
-				value.classList.add('mvz-clickable');
-				value.addEventListener('click', rowOptions.onValueClick);
+			if (rowOptions && rowOptions.creatorData) {
+				const data = rowOptions.creatorData;
+				const nameParts = rowOptions.variantValue !== undefined
+					? String(rowOptions.variantValue).split('||').map(function (part) { return part.trim(); })
+					: [data.lastName || '', data.firstName || ''];
+				const values = el(doc, 'span');
+				values.className = 'mvz-creator-values';
+				function createNameInput(valueText, placeholder, callback) {
+					const input = el(doc, 'input');
+					input.type = 'text';
+					input.className = 'mvz-row-value';
+					input.placeholder = I18n.t(placeholder);
+					input.value = valueText || '';
+					input.readOnly = !callback;
+					if (callback) input.addEventListener('input', callback);
+					values.appendChild(input);
+					return input;
+				}
+				if (data.fieldMode === 1) {
+					createNameInput(rowOptions.variantValue !== undefined ? rowOptions.variantValue : data.name, 'MVZ_CREATOR_FULL_NAME_PROMPT', function (event) {
+						rowOptions.onValueEdit(event.target.value);
+					});
+				} else {
+					const lastName = createNameInput(nameParts[0], 'MVZ_CREATOR_LAST_NAME_PROMPT', function () {
+						const first = values.querySelectorAll('input')[1];
+						rowOptions.onValueEdit(lastName.value + ' || ' + first.value);
+					});
+					const firstName = createNameInput(nameParts[1], 'MVZ_CREATOR_FIRST_NAME_PROMPT', function () {
+						rowOptions.onValueEdit(lastName.value + ' || ' + firstName.value);
+					});
+				}
+				r.appendChild(values);
+			} else {
+				const value = el(doc, 'input');
+				value.type = 'text';
+				value.className = 'mvz-row-value';
+				value.value = valueText || '';
+				value.readOnly = !(rowOptions && rowOptions.onValueEdit);
+				if (rowOptions && rowOptions.onValueEdit) {
+					value.addEventListener('input', function () { rowOptions.onValueEdit(value.value); });
+				}
+				if (rowOptions && rowOptions.onValueClick) value.addEventListener('click', rowOptions.onValueClick);
+				r.appendChild(value);
 			}
-			r.appendChild(value);
 
 			const btnBox = el(doc, 'span');
 			btnBox.className = 'mvz-row-buttons';
@@ -139,19 +260,16 @@ Zotero.MVZ.ItemPane = (function () {
 
 		// First line: base field + (first variant, if any).
 		const first = options.variants[0] || null;
-		row(options.labelText, options.baseValueText, [
-			{ text: '+L', title: I18n.t('MVZ_ADD_LANGUAGE_VARIANT_TOOLTIP'), disabled: options.baseValueBlank, onClick: options.onAddLanguage },
-			{ text: '+S', title: I18n.t('MVZ_ADD_SCRIPT_VARIANT_TOOLTIP'), disabled: options.baseValueBlank, onClick: options.onAddScript }
-		]);
-
-		if (first) {
-			renderVariantLine(doc, group, first, options);
-		}
-
-		// Subsequent variant lines.
-		options.variants.slice(1).forEach(function (v) {
-			renderVariantLine(doc, group, v, options);
+		row(options.labelText, options.baseValueText, options.buttons || [], {
+			onLabelContextMenu: options.onLabelContextMenu,
+			onLabelClick: options.onLabelClick,
+			onValueEdit: options.onBaseValueEdit,
+			onValueClick: options.onBaseValueClick,
+			creatorData: options.creatorData
 		});
+
+		if (first) renderVariantLine(doc, group, first, options);
+		options.variants.slice(1).forEach(function (v) { renderVariantLine(doc, group, v, options); });
 
 		container.appendChild(group);
 		return group;
@@ -163,28 +281,58 @@ Zotero.MVZ.ItemPane = (function () {
 
 		const typeLabel = el(doc, 'span');
 		typeLabel.className = 'mvz-row-label mvz-type-indicator';
-		typeLabel.textContent = I18n.t(variant.type === 'l' ? 'MVZ_TYPE_INDICATOR_L' : 'MVZ_TYPE_INDICATOR_S');
+		typeLabel.textContent = variant.type.toUpperCase();
 		r.appendChild(typeLabel);
 
 		const tag = el(doc, 'span');
 		tag.className = 'mvz-row-tag mvz-clickable';
-		tag.textContent = I18n.t('MVZ_VARIANT', { language_tag: variant.tag });
+		tag.textContent = variant.tag;
 		tag.addEventListener('click', function () { options.onChangeVariantTag(variant); });
 		r.appendChild(tag);
 
-		const value = el(doc, 'input');
-		value.type = 'text';
-		value.className = 'mvz-row-value mvz-variant-value';
-		value.value = variant.value;
-		value.addEventListener('input', function () { options.onEditVariant(variant, value.value); });
-		r.appendChild(value);
+		if (options.creatorData) {
+			const values = el(doc, 'span');
+			values.className = 'mvz-creator-values';
+			const parts = String(variant.value || '').split('||').map(function (part) { return part.trim(); });
+			function addCreatorInput(valueText, placeholder, onInput) {
+				const input = el(doc, 'input');
+				input.type = 'text';
+				input.className = 'mvz-row-value mvz-variant-value' + (valueText ? '' : ' mvz-empty-variant');
+				input.placeholder = I18n.t(placeholder);
+				input.value = valueText || '';
+				input.addEventListener('input', onInput);
+				values.appendChild(input);
+				return input;
+			}
+			if (options.creatorData.fieldMode === 1) {
+				addCreatorInput(variant.value, 'MVZ_CREATOR_FULL_NAME_PROMPT', function (event) {
+					options.onEditVariant(variant, event.target.value);
+				});
+			} else {
+				let lastName;
+				let firstName;
+				lastName = addCreatorInput(parts[0], 'MVZ_CREATOR_LAST_NAME_PROMPT', function () {
+					options.onEditVariant(variant, lastName.value + ' || ' + firstName.value);
+				});
+				firstName = addCreatorInput(parts[1], 'MVZ_CREATOR_FIRST_NAME_PROMPT', function () {
+					options.onEditVariant(variant, lastName.value + ' || ' + firstName.value);
+				});
+			}
+			r.appendChild(values);
+		} else {
+			const value = el(doc, 'input');
+			value.type = 'text';
+			value.className = 'mvz-row-value mvz-variant-value' + (variant.value ? '' : ' mvz-empty-variant');
+			value.value = variant.value;
+			value.addEventListener('input', function () { options.onEditVariant(variant, value.value); });
+			r.appendChild(value);
+		}
 
 		const del = el(doc, 'button');
 		del.className = 'mvz-row-delete';
 		del.textContent = '-';
 		del.title = I18n.t('MVZ_DELETE_VARIANT_TOOLTIP');
 		del.addEventListener('click', function () {
-			if (!doc.defaultView.confirm(I18n.t('MVZ_DELETE_VARIANT_CONFIRM_BODY'))) return;
 			options.onDeleteVariant(variant);
 		});
 		r.appendChild(del);
@@ -216,56 +364,82 @@ Zotero.MVZ.ItemPane = (function () {
 		}));
 
 		const languageClean = Core.isLanguageFieldClean(item.getField('language') || '');
+		const creatorData = item.getCreators();
 
 		function persist() {
 			debouncedSave(item, state);
 		}
 
-		function addVariant(type, field, creatorIndex) {
+		function saveItem() {
+			item.saveTx().catch(function (e) {
+				Zotero.logError(e);
+				Zotero.alert(null, I18n.t('MVZ_SAVE_ERROR_TITLE'), I18n.t('MVZ_SAVE_ERROR_BODY', { error_message: String(e) }));
+			});
+		}
+
+		function scriptOfTag(tag) {
+			const parsed = Zotero.MVZ.BCP47.parseTag(tag);
+			if (parsed.script) return parsed.script;
+			const first = String(tag).split('-')[0];
+			return Zotero.MVZ.BCP47.isValidScript(first) ? Zotero.MVZ.BCP47.formatScript(first) : null;
+		}
+
+		function applyVariant(type, field, creatorIndex, tag, editingVariant) {
 			if (!languageClean) {
 				Zotero.alert(null, I18n.t('MVZ_LANGUAGE_NOT_CLEAN_TITLE'), I18n.t('MVZ_LANGUAGE_NOT_CLEAN_BODY'));
 				return;
 			}
-			const itemLanguages = (item.getField('language') || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-			CommonUI.openTagEditor(doc, { mode: type === 'l' ? 'language' : 'script' }).then(function (tag) {
-				if (!tag) return;
+			const itemLanguages = (item.getField('language') || '').split(',').map(function (s) { return s.trim(); }).filter(Core.isValidItemLanguageTag);
+			const parsedTag = Zotero.MVZ.BCP47.parseTag(tag);
 
-				// "The UI must prevent adding an L-type variant for any language
-				// tag already listed in the item's Language field, or an S-type
-				// variant for any script tag matching the explicit or implied
-				// script of those item languages."
-				if (type === 'l' && itemLanguages.some(function (lt) { return Zotero.MVZ.BCP47.parseTag(lt).language === Zotero.MVZ.BCP47.parseTag(tag).language; })) {
-					Zotero.alert(null, '', I18n.t('MVZ_LANGUAGE_ALREADY_IN_ITEM', { language_tag: tag }));
+			// "The UI must prevent adding an L-type variant for any language
+			// tag already listed in the item's Language field, or an S-type
+			// variant for any script tag matching the explicit or implied
+			// script of those item languages."
+			if (type === 'l' && itemLanguages.some(function (lt) { return Zotero.MVZ.BCP47.parseTag(lt).language === parsedTag.language; })) {
+				Zotero.alert(null, '', I18n.t('MVZ_LANGUAGE_ALREADY_IN_ITEM', { language_tag: tag }));
+				return;
+			}
+			if (type === 's') {
+				const tagScript = scriptOfTag(tag);
+				const clashes = itemLanguages.some(function (lt) {
+					const parsed = Zotero.MVZ.BCP47.parseTag(lt);
+					const impliedScript = parsed.script || Zotero.MVZ.BCP47.defaultScriptForLanguage(parsed.language);
+					return impliedScript && tagScript && impliedScript.toLowerCase() === tagScript.toLowerCase();
+				});
+				if (clashes) {
+					Zotero.alert(null, '', I18n.t('MVZ_SCRIPT_ALREADY_IN_ITEM', { script_tag: tag }));
 					return;
 				}
-				if (type === 's') {
-					const tagScript = Zotero.MVZ.BCP47.parseTag(tag).script;
-					const clashes = itemLanguages.some(function (lt) {
-						const parsed = Zotero.MVZ.BCP47.parseTag(lt);
-						const impliedScript = parsed.script || Zotero.MVZ.BCP47.defaultScriptForLanguage(parsed.language);
-						return impliedScript && tagScript && impliedScript.toLowerCase() === tagScript.toLowerCase();
-					});
-					if (clashes) {
-						Zotero.alert(null, '', I18n.t('MVZ_SCRIPT_ALREADY_IN_ITEM', { script_tag: tag }));
-						return;
-					}
-				}
+			}
 
-				// Duplicate-variant guard (Appendix 1, MVZ_DUPLICATE_VARIANT).
-				const existing = creatorIndex !== null && creatorIndex !== undefined
-					? variantsFor(state, null, creatorIndex)
-					: variantsFor(state, field);
-				if (existing.some(function (v) { return v.tag === tag; })) {
-					Zotero.alert(null, '', I18n.t('MVZ_DUPLICATE_VARIANT', {
-						field_name: field || 'creator',
-						language_tag: tag
-					}));
-					return;
-				}
+			const existing = creatorIndex !== null && creatorIndex !== undefined
+				? variantsFor(state, null, creatorIndex)
+				: variantsFor(state, field);
+			if (existing.some(function (v) { return v !== editingVariant && v.type === type && v.tag === tag; })) {
+				Zotero.alert(null, '', I18n.t('MVZ_DUPLICATE_VARIANT', {
+					field_name: field || 'creator',
+					language_tag: tag
+				}));
+				return;
+			}
+			if (editingVariant) {
+				editingVariant.type = type;
+				editingVariant.tag = tag;
+			} else {
+				state.variants.push({ type: type, field: field || null, creatorIndex: creatorIndex === undefined ? null : creatorIndex, variantIndex: existing.length, tag: tag, value: '' });
+			}
+			persist();
+			render(body, item);
+		}
 
-				state.variants.push({ type: type, field: field || null, creatorIndex: creatorIndex === undefined ? null : creatorIndex, tag: tag, value: '' });
-				persist();
-				render(body, item);
+		function chooseVariant(field, creatorIndex, editingVariant) {
+			if (!Core.isLanguageFieldClean(item.getField('language') || '')) {
+				Zotero.alert(null, I18n.t('MVZ_LANGUAGE_NOT_CLEAN_TITLE'), I18n.t('MVZ_LANGUAGE_NOT_CLEAN_BODY'));
+				return;
+			}
+			openVariantShortlist(doc, function (type, tag) {
+				applyVariant(type, field, creatorIndex, tag, editingVariant);
 			});
 		}
 
@@ -282,44 +456,242 @@ Zotero.MVZ.ItemPane = (function () {
 		}
 
 		function changeVariantTag(variant) {
-			CommonUI.openTagEditor(doc, { mode: variant.type === 'l' ? 'language' : 'script' }).then(function (tag) {
-				if (!tag) return;
-				variant.tag = tag;
-				persist();
-				render(body, item);
+			chooseVariant(variant.field, variant.creatorIndex, variant);
+		}
+
+		function editCreator(index, value) {
+			const creator = Object.assign({}, item.getCreators()[index]);
+			if (!creator) return;
+			if (creator.fieldMode === 1) {
+				creator.name = value;
+			} else {
+				const parts = value.split('||');
+				creator.lastName = (parts[0] || '').trim();
+				creator.firstName = (parts[1] || '').trim();
+			}
+			item.setCreator(index, creator);
+			saveItem();
+		}
+
+		function openCreatorTypeMenu(index) {
+			let types;
+			try {
+				const itemTypeID = Zotero.ItemTypes.getID(item.itemType);
+				if (!Zotero.CreatorTypes || typeof Zotero.CreatorTypes.getTypesForItemType !== 'function') return;
+				types = Zotero.CreatorTypes.getTypesForItemType(itemTypeID);
+			} catch (e) {
+				Zotero.logError(e);
+				return;
+			}
+			if (!Array.isArray(types)) return;
+			const menu = popupShell(doc, 'MVZ_CREATOR_TYPE_MENU_TITLE');
+			menu.overlay.addEventListener('click', function (event) {
+				if (event.target === menu.overlay) menu.close();
+			});
+			types.forEach(function (entry) {
+				let typeID = typeof entry === 'number' ? entry : entry && (entry.creatorTypeID || entry.id);
+				if (typeID === undefined && typeof entry === 'string' && typeof Zotero.CreatorTypes.getID === 'function') {
+					typeID = Zotero.CreatorTypes.getID(entry);
+				}
+				if (typeID === undefined || typeID === null) return;
+				const option = el(doc, 'button');
+				option.type = 'button';
+				option.textContent = I18n.resolveCreatorType(typeID);
+				option.addEventListener('click', function () {
+					const next = Object.assign({}, item.getCreators()[index]);
+					next.creatorTypeID = typeID;
+					item.setCreator(index, next);
+					saveItem();
+					menu.close();
+					render(body, item);
+				});
+				menu.content.appendChild(option);
 			});
 		}
 
+		function capitalizeName(value) {
+			return String(value || '').replace(/(^|\s)([^\s])/g, function (match, space, letter) {
+				return space + letter.toLocaleUpperCase();
+			});
+		}
+
+		function openCreatorContextMenu(index) {
+			const current = item.getCreators()[index];
+			const single = current.fieldMode === 1;
+			const menu = popupShell(doc, 'MVZ_CREATOR_CONTEXT_MENU_TITLE');
+			menu.overlay.addEventListener('click', function (event) {
+				if (event.target === menu.overlay) menu.close();
+			});
+			const fix = el(doc, 'button');
+			fix.type = 'button';
+			fix.textContent = I18n.t('MVZ_CREATOR_FIX_CASE');
+			const names = single ? [current.name] : [current.firstName, current.lastName];
+			fix.disabled = names.every(function (name) { return !name || capitalizeName(name) === name; });
+			fix.addEventListener('click', function () {
+				const next = Object.assign({}, current);
+				if (single) next.name = capitalizeName(next.name);
+				else {
+					next.firstName = capitalizeName(next.firstName);
+					next.lastName = capitalizeName(next.lastName);
+				}
+				item.setCreator(index, next);
+				saveItem();
+				menu.close();
+				render(body, item);
+			});
+			menu.content.appendChild(fix);
+			if (!single) {
+				const swap = el(doc, 'button');
+				swap.type = 'button';
+				swap.textContent = I18n.t('MVZ_CREATOR_SWAP_NAMES');
+				swap.addEventListener('click', function () {
+					const next = Object.assign({}, current);
+					const last = next.lastName;
+					next.lastName = next.firstName;
+					next.firstName = last;
+					item.setCreator(index, next);
+					saveItem();
+					menu.close();
+					render(body, item);
+				});
+				menu.content.appendChild(swap);
+			}
+		}
+
+		function creatorButtons(index, creator) {
+			const single = creator.fieldMode === 1;
+			return [
+				{ text: single ? 'Ⅱ' : '▭', title: I18n.t(single ? 'MVZ_CREATOR_SWITCH_TWO' : 'MVZ_CREATOR_SWITCH_SINGLE'), onClick: function () {
+					const next = Object.assign({}, item.getCreators()[index]);
+					const relatedVariants = variantsFor(state, null, index);
+					if (next.fieldMode === 1) {
+						const words = (next.name || '').trim().split(/\s+/).filter(Boolean);
+						next.lastName = words.pop() || '';
+						next.firstName = words.join(' ');
+						next.name = '';
+						next.fieldMode = 0;
+						relatedVariants.forEach(function (variant) {
+							const raw = String(variant.value || '').trim();
+							const parts = raw.includes('||')
+								? raw.split('||').map(function (part) { return part.trim(); })
+								: (function () {
+									const words = raw.split(/\s+/).filter(Boolean);
+									const lastName = words.pop() || '';
+									return [lastName, words.join(' ')];
+								})();
+							variant.value = (parts[0] || '') + ' || ' + (parts[1] || '');
+						});
+					} else {
+						next.name = [next.firstName, next.lastName].filter(Boolean).join(' ');
+						next.firstName = '';
+						next.lastName = '';
+						next.fieldMode = 1;
+						relatedVariants.forEach(function (variant) {
+							const parts = String(variant.value || '').split('||').map(function (part) { return part.trim(); });
+							variant.value = [parts[1] || '', parts[0] || ''].filter(Boolean).join(' ');
+						});
+					}
+					item.setCreator(index, next);
+					persist();
+					saveItem();
+					render(body, item);
+				}},
+				{ text: '⊖', title: I18n.t('MVZ_CREATOR_DELETE'), disabled: !(creator.firstName || creator.lastName || creator.name), onClick: function () {
+					const list = item.getCreators();
+					if (list.length === 1) {
+						list[0].firstName = '';
+						list[0].lastName = '';
+						list[0].name = '';
+						list[0].fieldMode = 0;
+						state.variants = state.variants.filter(function (variant) { return variant.creatorIndex !== index; });
+					} else {
+						list.splice(index, 1);
+						state.variants = state.variants.filter(function (variant) { return variant.creatorIndex !== index; });
+						state.variants.forEach(function (variant) {
+							if (variant.creatorIndex > index) variant.creatorIndex -= 1;
+						});
+					}
+					persist();
+					item.setCreators(list);
+					saveItem();
+					render(body, item);
+				}},
+				{ text: '⊕', title: I18n.t('MVZ_CREATOR_CREATE'), disabled: !(creator.firstName || creator.lastName || creator.name), onClick: function () {
+					const list = item.getCreators();
+					list.splice(index + 1, 0, { firstName: '', lastName: '', fieldMode: 0, creatorTypeID: creator.creatorTypeID });
+					state.variants.forEach(function (variant) {
+						if (variant.creatorIndex >= index + 1) variant.creatorIndex += 1;
+					});
+					persist();
+					item.setCreators(list);
+					saveItem();
+					render(body, item);
+				}},
+				{ text: '…', title: I18n.t('MVZ_CREATOR_CONTEXT_MENU_TOOLTIP'), onClick: function () { openCreatorContextMenu(index); } }
+			];
+		}
+
 		// --- Regular fields --------------------------------------------
-		orderedVariantFieldsForItem(item).forEach(function (fieldName) {
-			const baseValue = item.getField(fieldName) || '';
+		function renderField(fieldName) {
+			const baseValue = String(item.getField(fieldName) || '');
 			renderVariantRow(doc, body, {
-				labelText: I18n.t('MVZ_BASE_FIELD', { base_field_name: fieldName }),
+				labelText: I18n.resolveField(fieldName),
 				baseValueText: baseValue,
 				baseValueBlank: !baseValue,
 				variants: variantsFor(state, fieldName),
-				onAddLanguage: function () { addVariant('l', fieldName, null); },
-				onAddScript: function () { addVariant('s', fieldName, null); },
+				onLabelContextMenu: function () {
+					if (!Core.isVariantField(fieldName)) {
+						Zotero.alert(null, '', I18n.t('MVZ_VARIANTS_UNAVAILABLE', { field_name: I18n.resolveField(fieldName) }));
+						return;
+					}
+					chooseVariant(fieldName, null, null);
+				},
+				onBaseValueEdit: fieldName === 'language' ? null : Core.debounce(function (value) {
+					item.setField(fieldName, value);
+					saveItem();
+				}, 300),
+				onBaseValueClick: fieldName === 'language' ? function () { onLanguageFieldFocus(doc.defaultView); } : null,
 				onEditVariant: editVariant,
 				onDeleteVariant: deleteVariant,
 				onChangeVariantTag: changeVariantTag
 			});
-		});
+		}
 
 		// --- Creators -----------------------------------------------------
-		item.getCreators().forEach(function (creator, index) {
-			const baseValue = creator.name || [creator.lastName, creator.firstName].filter(Boolean).join(', ');
+		function renderCreator(index) {
+			const creator = creatorData[index];
+			const baseValue = creator.fieldMode === 1
+				? (creator.name || '')
+				: [creator.lastName, creator.firstName].filter(Boolean).join(', ');
+			let creatorTypeLabel = String(creator.creatorTypeID);
+			try { creatorTypeLabel = I18n.resolveCreatorType(creator.creatorTypeID); } catch (e) { Zotero.logError(e); }
 			renderVariantRow(doc, body, {
-				labelText: I18n.t('MVZ_CREATOR_FIELD_LABEL', { this_creator_index: index }),
+				labelText: creatorTypeLabel + ' ▼',
 				baseValueText: baseValue,
 				baseValueBlank: !baseValue,
+				buttons: creatorButtons(index, creator),
+				creatorData: creator,
 				variants: variantsFor(state, null, index),
-				onAddLanguage: function () { addVariant('l', null, index); },
-				onAddScript: function () { addVariant('s', null, index); },
+				onLabelClick: function () { openCreatorTypeMenu(index); },
+				onLabelContextMenu: function () { chooseVariant(null, index, null); },
+				onBaseValueEdit: Core.debounce(function (value) { editCreator(index, value); }, 300),
 				onEditVariant: editVariant,
 				onDeleteVariant: deleteVariant,
 				onChangeVariantTag: changeVariantTag
 			});
+		}
+
+		renderVariantRow(doc, body, {
+			labelText: I18n.t('MVZ_ITEM_TYPE_LABEL'),
+			baseValueText: I18n.resolveItemType(item.itemType),
+			baseValueBlank: false,
+			variants: [],
+			onBaseValueEdit: null,
+			onLabelContextMenu: function () { Zotero.alert(null, '', I18n.t('MVZ_VARIANTS_UNAVAILABLE', { field_name: I18n.t('MVZ_ITEM_TYPE_LABEL') })); }
+		});
+		orderedInfoEntries(item, doc, creatorData.length).forEach(function (entry) {
+			if (entry.kind === 'field') renderField(entry.name);
+			else renderCreator(entry.index);
 		});
 	}
 
@@ -448,22 +820,8 @@ Zotero.MVZ.ItemPane = (function () {
 	const _extraCache = new Map(); // itemID -> cached mvz/ variants text, while the warning is up.
 
 	function _findFieldRow(doc, fieldName) {
-		// See file header: these selectors are best-effort guesses at
-		// Zotero's native main-pane row markup and should be verified
-		// against a live install.
-		const selectors = [
-			'[fieldname="' + fieldName + '"]',
-			'[data-field="' + fieldName + '"]',
-			'#' + fieldName,
-			'.' + fieldName + '-box'
-		];
-		for (const sel of selectors) {
-			try {
-				const el = doc.querySelector(sel);
-				if (el) return el;
-			} catch (e) { /* invalid selector for this fieldName - ignore */ }
-		}
-		return null;
+		const control = doc.querySelector('editable-text[fieldname="' + fieldName + '"]');
+		return control ? control.closest('.meta-row') : null;
 	}
 
 	function installFieldPopups(mainWindow) {
@@ -483,7 +841,7 @@ Zotero.MVZ.ItemPane = (function () {
 		doc.addEventListener('focusout', function (ev) {
 			const extraRow = _findFieldRow(doc, 'extra');
 			if (extraRow && extraRow.contains(ev.target)) {
-				onExtraFieldBlur(mainWindow);
+				onExtraFieldBlur(mainWindow, ev.target);
 			}
 		}, true);
 	}
@@ -496,27 +854,68 @@ Zotero.MVZ.ItemPane = (function () {
 		}
 	}
 
-	function onExtraFieldFocus(mainWindow) {
-		const item = currentItem(mainWindow);
-		if (!item) return;
-		if (_extraCache.has(item.id)) return; // Warning already acknowledged/open.
+	const _extraWarningOpen = new Set();
+	const _languagePopupOpen = new Set();
 
-		const state = loadState(item);
-		_extraCache.set(item.id, state.variants);
-
-		mainWindow.alert(I18n.t('MVZ_EXTRA_WARNING'));
+	function popupShell(doc, titleToken) {
+		const overlay = el(doc, 'div');
+		overlay.className = 'mvz-modal-overlay';
+		const dialog = el(doc, 'div');
+		dialog.className = 'mvz-modal-dialog';
+		const title = el(doc, 'h3');
+		title.textContent = I18n.t(titleToken);
+		const content = el(doc, 'div');
+		dialog.appendChild(title);
+		dialog.appendChild(content);
+		overlay.appendChild(dialog);
+		doc.documentElement.appendChild(overlay);
+		return { overlay: overlay, content: content, close: function () { overlay.remove(); } };
 	}
 
-	function onExtraFieldBlur(mainWindow) {
+	function onExtraFieldFocus(mainWindow) {
 		const item = currentItem(mainWindow);
-		if (!item) return;
+		if (!item || _extraCache.has(item.id)) return;
+		const state = loadState(item);
+		_extraCache.set(item.id, state.variants);
+		_extraWarningOpen.add(item.id);
+		const doc = mainWindow.document;
+		const active = doc.activeElement;
+		const start = active && typeof active.selectionStart === 'number' ? active.selectionStart : null;
+		const end = active && typeof active.selectionEnd === 'number' ? active.selectionEnd : null;
+		const popup = popupShell(doc, 'MVZ_EXTRA_WARNING_TITLE');
+		const message = el(doc, 'p');
+		message.textContent = I18n.t('MVZ_EXTRA_WARNING');
+		const understood = el(doc, 'button');
+		understood.type = 'button';
+		understood.textContent = I18n.t('MVZ_EXTRA_WARNING_BUTTON');
+		understood.addEventListener('click', function () {
+			_extraWarningOpen.delete(item.id);
+			popup.close();
+			const row = _findFieldRow(doc, 'extra');
+			const control = row && row.querySelector('textarea');
+			if (control) {
+				control.focus();
+				if (start !== null && end !== null) control.setSelectionRange(start, end);
+			}
+		});
+		popup.content.appendChild(message);
+		popup.content.appendChild(understood);
+		understood.focus();
+	}
+
+	function onExtraFieldBlur(mainWindow, target) {
+		const item = currentItem(mainWindow);
+		if (!item || _extraWarningOpen.has(item.id)) return;
 		const cachedVariants = _extraCache.get(item.id);
 		if (!cachedVariants) return;
-		_extraCache.delete(item.id);
-
-		const rawExtra = item.getField('extra') || '';
-		const preserved = Core.parseExtra(rawExtra).preserved;
-		saveState(item, { preserved: preserved, variants: cachedVariants });
+		const row = _findFieldRow(mainWindow.document, 'extra');
+		const control = target && target.localName === 'textarea' ? target : row && row.querySelector('textarea');
+		const rawExtra = control ? control.value : item.getField('extra') || '';
+		setTimeout(function () {
+			_extraCache.delete(item.id);
+			const preserved = Core.parseExtra(rawExtra).preserved;
+			saveState(item, { preserved: preserved, variants: cachedVariants });
+		}, 0);
 	}
 
 	// -----------------------------------------------------------------
@@ -525,37 +924,45 @@ Zotero.MVZ.ItemPane = (function () {
 
 	function onLanguageFieldFocus(mainWindow) {
 		const item = currentItem(mainWindow);
-		if (!item) return;
+		if (!item || _languagePopupOpen.has(item.id)) return;
+		_languagePopupOpen.add(item.id);
 		const doc = mainWindow.document;
 		const raw = item.getField('language') || '';
-
-		if (!Core.isLanguageFieldClean(raw)) {
-			const cleaned = Core.cleanLanguageField(raw);
-			if (cleaned.normalized && cleaned.normalized !== raw) {
-				item.setField('language', cleaned.normalized);
-				item.saveTx().catch(function (e) { Zotero.logError(e); });
-			}
-		}
-
-		const current = (item.getField('language') || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-		openLanguageListEditor(doc, item, current);
+		const current = raw ? raw.split(',').map(function (s) { return s.trim(); }) : [];
+		openLanguageListEditor(doc, item, current, function () { _languagePopupOpen.delete(item.id); });
 	}
 
-	function openLanguageListEditor(doc, item, tags) {
-		// A lightweight inline editor using the common tag-list widget
-		// (Common UI > Script/language list).
+	function openLanguageListEditor(doc, item, tags, onClose) {
+		const popup = popupShell(doc, 'MVZ_LANGUAGE_FIELD_EDITOR_TITLE');
 		const host = el(doc, 'div');
-		host.className = 'mvz-language-popup';
 		CommonUI.renderList(host, {
 			mode: 'language',
 			getItems: function () { return tags; },
 			setItems: function (next) { tags = next; },
-			onChange: function () {
-				item.setField('language', tags.join(', '));
-				item.saveTx().catch(function (e) { Zotero.logError(e); });
-			}
+			onChange: function () {}
 		});
-		doc.documentElement.appendChild(host);
+		popup.content.appendChild(host);
+		const buttons = el(doc, 'div');
+		buttons.className = 'mvz-dialog-buttons';
+		const save = el(doc, 'button');
+		save.type = 'button';
+		save.textContent = I18n.t('MVZ_OK_BUTTON');
+		save.addEventListener('click', function () {
+			item.setField('language', tags.join(', '));
+			item.saveTx().catch(function (e) { Zotero.logError(e); });
+			popup.close();
+			onClose();
+		});
+		const cancel = el(doc, 'button');
+		cancel.type = 'button';
+		cancel.textContent = I18n.t('MVZ_CANCEL_BUTTON');
+		cancel.addEventListener('click', function () {
+			popup.close();
+			onClose();
+		});
+		buttons.appendChild(save);
+		buttons.appendChild(cancel);
+		popup.content.appendChild(buttons);
 	}
 
 	return {

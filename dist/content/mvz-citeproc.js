@@ -33,7 +33,7 @@ Zotero.MVZ.Citeproc = (function () {
 	// settings > "Template syntax")
 	// -----------------------------------------------------------------
 
-	const ALLOWED_TAGS_RE = /<\/?(i|b)>/gi;
+	const ALLOWED_TAGS_RE = /^<\/?(i|b)>$/i;
 
 	/** Strip every HTML tag except <i>, </i>, <b>, </b> (custom templates only). */
 	function sanitizeTemplate(template) {
@@ -90,17 +90,20 @@ Zotero.MVZ.Citeproc = (function () {
 	// Built-in style templates ("Examples of rendering based on these options").
 	const BUILTIN_STYLES = {
 		apa: {
-			standalone: '<i>{transliteration}</i>[ ({original})][ [{translation}]]',
-			contained: '"{transliteration}"[ ({original})][ [{translation}]]'
+			standalone: '<i>{transliteration}</i>[ [{translation}]]',
+			contained: '{transliteration}[ [{translation}]]'
+		},
+		cmos: {
+			standalone: '<i>{transliteration}</i>[ {original}][ [{translation}]]',
+			contained: '"{transliteration}"[ {original}][ [{translation}]]'
 		},
 		mla: {
-			// "(Original Script omitted)" - MLA never shows {original}.
-			standalone: '<i>{transliteration}</i>[ [{translation}]]',
-			contained: '"{transliteration}"[ [{translation}]]'
+			standalone: '[{original};][ <i>{transliteration}</i>][ [<i>{translation}</i>]]',
+			contained: '[{original};] “{transliteration}”[ [“{translation}”]]'
 		},
 		mhra: {
-			standalone: "<i>{transliteration}</i>[ [{original}]][ '{translation}']",
-			contained: "'{transliteration}'[ [{original}]][ '{translation}']"
+			standalone: '<i>{transliteration}</i>[ {original}][ [{translation}]]',
+			contained: "'{transliteration}'[ {original}][ ['{translation}']]"
 		}
 	};
 
@@ -129,7 +132,7 @@ Zotero.MVZ.Citeproc = (function () {
 
 	function itemLanguageTags(item) {
 		const raw = item.getField('language') || '';
-		return raw.split(',').map(function (s) { return s.trim(); }).filter(Boolean).map(function (t) { return BCP47.parseTag(t); }).filter(function (p) { return p.valid; });
+		return raw.split(',').map(function (s) { return s.trim(); }).filter(Core.isValidItemLanguageTag).map(function (t) { return BCP47.parseTag(t); });
 	}
 
 	function preliminaryChecks(item, target) {
@@ -150,8 +153,12 @@ Zotero.MVZ.Citeproc = (function () {
 	// -----------------------------------------------------------------
 
 	function tagParts(variant) {
-		const p = BCP47.parseTag(variant.tag);
-		return { language: p.language, script: p.script };
+		let p = BCP47.parseTag(variant.tag);
+		if (!p.valid) {
+			const first = String(variant.tag).split('-')[0];
+			if (BCP47.isValidScript(first)) p = BCP47.parseTag('und-' + variant.tag);
+		}
+		return { language: p.language || 'und', script: p.script };
 	}
 
 	/** 2.1 / 3.2 - find the best S-type (transliteration) match. */
@@ -217,7 +224,7 @@ Zotero.MVZ.Citeproc = (function () {
 		let transliterationSlot, originalSlot;
 		if (translitValue) {
 			transliterationSlot = translitValue;
-			originalSlot = prefs.original ? originalValue : '';
+			originalSlot = prefs.original && Core.getPref('targetDocument.includeOriginal', true) ? originalValue : '';
 		} else {
 			transliterationSlot = originalValue;
 			originalSlot = '';
@@ -297,18 +304,20 @@ Zotero.MVZ.Citeproc = (function () {
 				});
 
 				const creators = item.getCreators();
-				if (creators.length && Array.isArray(cslData.author || cslData.editor)) {
-					// CSL-JSON keys creators by creator-type role (author, editor,
-					// translator, ...); rebuild whichever role arrays are present
-					// using the same per-creator-index resolution.
+				// CSL-JSON keys creators by creator-type role (author, editor,
+				// translator, ...); rebuild whichever role arrays are present
+				// using the same per-creator-index resolution.
+				if (creators.length) {
 					Object.keys(cslData).forEach(function (key) {
 						if (!Array.isArray(cslData[key])) return;
-						cslData[key] = cslData[key].map(function (entry, roleIndex) {
+						const used = new Set();
+					cslData[key] = cslData[key].map(function (entry) {
 							const creatorIndex = creators.findIndex(function (c, i) {
-								return originalCreatorJSON(c).family === entry.family
-									|| originalCreatorJSON(c).literal === entry.literal;
+								const original = originalCreatorJSON(c);
+								return !used.has(i) && (original.family === entry.family || original.literal === entry.literal);
 							});
 							if (creatorIndex === -1) return entry;
+							used.add(creatorIndex);
 							return Object.assign({}, entry, resolveCreator(creators[creatorIndex], creatorIndex, extra.variants, prelim, target, matrix));
 						});
 					});

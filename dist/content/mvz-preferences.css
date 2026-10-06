@@ -1,0 +1,28 @@
+/* MVZ Plugin - Settings pane styling (tabbed sub-pane architecture) */
+
+/* Defensive: Zotero's preferences window is a XUL document and its pane
+ * container may be a XUL flex box. Force this fragment's root to behave
+ * as a normal block box with real height instead of silently collapsing
+ * to zero size, which would look like "nothing happens when clicked"
+ * (TEST_REPORT_Alpha.1.md, Settings > "Displays the preferences"). */
+#mvz-settings-root {
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 400px;
+	font-size: 1em;
+}
+
+.mvz-tab-bar { display: flex; gap: 4px; border-bottom: 1px solid #ccc; margin-bottom: 8px; }
+.mvz-tab-button { padding: 6px 12px; border: none; background: none; cursor: pointer; }
+.mvz-tab-button.mvz-active { border-bottom: 2px solid #4a6da7; font-weight: bold; }
+
+.mvz-tab-panel section { margin-bottom: 16px; }
+
+#mvz-field-matrix { width: 100%; border-collapse: collapse; }
+#mvz-field-matrix th, #mvz-field-matrix td { border-bottom: 1px solid #eee; padding: 4px 8px; text-align: center; }
+#mvz-field-matrix th:first-child, #mvz-field-matrix td:first-child { text-align: left; }
+
+.mvz-tag-list-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.mvz-tag-list-label { flex: 1; cursor: pointer; }
+.mvz-shortlist-preferences { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }

@@ -25,3 +25,17 @@
 .mvz-picker-search { width: 100%; margin-bottom: 8px; }
 .mvz-picker-row { padding: 4px; cursor: pointer; }
 .mvz-picker-row:hover { background: #eef; }
+.mvz-row-label { color: #555; background: #eee; font-weight: 400; }
+.mvz-row-value { min-width: 0; color: #111; background: #eee; border: 1px solid transparent; }
+.mvz-row-value:focus { background: #fff; border-color: #aaa; outline: none; }
+.mvz-blank .mvz-variant-value, .mvz-empty-variant { border: 1px solid #c00; }
+.mvz-variant-row .mvz-type-indicator { font-size: 0.85em; text-align: right; }
+.mvz-variant-row .mvz-row-tag { flex: 0 0 140px; font-size: 0.85em; text-align: right; cursor: pointer; }
+.mvz-row-buttons { opacity: 0; }
+.mvz-row:hover .mvz-row-buttons { opacity: 1; }
+.mvz-shortlist-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.mvz-shortlist-columns > div { display: flex; flex-direction: column; gap: 4px; }
+.mvz-tag-invalid { color: #b00020; border: 1px solid #b00020; }
+.mvz-dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.mvz-creator-values { display: flex; flex: 1; gap: 6px; min-width: 0; }
+.mvz-creator-values input { min-width: 0; flex: 1; }
