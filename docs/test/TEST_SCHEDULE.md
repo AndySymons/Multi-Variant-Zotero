@@ -1,6 +1,6 @@
 # TEST SCHEDULE 
 
-06-Oct-2026 15:13 
+06-Oct-2026 19:57 
 
 Andrew Symons 
 
@@ -175,13 +175,18 @@ Recommendation on readiness for release 1.0.0-Beta.1: **Not ready**
 
 ## 500 Variants
 
-### Creator field variants
+### Regular field variants 
 
 | Test number | Procedure | Expectation                                                  | Result | Observations |
 | :---------: | :-------- | :----------------------------------------------------------- | :----: | :----------- |
 |   **501**   |           | Left click on a field label (except Creator type) has no effect |        |              |
 |   **502**   |           | Right click on a field label enables a variant to be added   |        |              |
-|   **551**   |           | Right click on a creator type label enables a variant to be added |        |              |
+
+### Creator field variants
+
+| Test no | Expectation                                                  | STATUS | Comments |
+| ------- | ------------------------------------------------------------ | ------ | -------- |
+| **551** | Right click on a creator type label enables a variant to be added |        |          |
 
 
 
