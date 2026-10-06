@@ -1,10 +1,10 @@
 # AGENT RULES 
 
-Draft 3
+Draft 4
 
 Andrew Symons
 
-04-Oct-2026
+06-Oct-2026
 
 
 
@@ -32,7 +32,25 @@ You access to the developer’s computer is limited the MVZ workspace provided.
 
 Developer’s information from outside this workspace is strictly out of bounds.  
 
-Do NOT search the internet unless specifically asked to do so.  
+## Internet access
+
+General internet scanning is prohibited on costs grounds. 
+
+However, you may access the following sites for essential technical specifications and data files.   
+
+- Zotero’s own site:
+   - https://www.zotero.org/ 
+   - However, do NOT rely on unverified information in the Zotero Forums https://forums.zotero.org/
+- Zotero on Github: 
+   - https://github.com/zotero/. 
+- CLDR on Github: 
+   - https://github.com/unicode-org/cldr-json 
+- IANA: 
+   - https://www.iana.org/assignments/language-subtag-registry/ 
+- Pre-parsed IANA JSON mirror (optional for faster setup):
+   - https://github.com/mattcg/language-subtag-registry
+
+If other specific sites might be pertinent to the job in hand, please ask for permission to access. 
 
 ## Stateless
 
@@ -123,9 +141,9 @@ The version sting must be available and written to headers of any output files f
 
 # Output packaging rules
 
-1. The folder `/mvz1_package` is entirely for your use. 
-   - Move into here what you need to include in the final `.xpi` package 
-   - Delete anything here that you no  longer need 
-   - The originals on which you based the package are preserved in `/src`, which you should not touch.  
-2. The file `multi-variant-zotero.xpi` in the root folder is simply your zip of `/mvz1_package` from the last version, which I used to instal in Zotero. 
-   - You may therefore simply delete/overwrite this file with each new version. There is no need to check inside it. 
+1. The folder `/dist` is entirely for your use: 
+   - Write into here what you need to include in the final `.xpi` package 
+   - Deprecate anything here that you no  longer need or move elsewhere 
+2. Delivery: 
+   - Produce the file `multi-variant-zotero.xpi`  as your zip of `/dist` and write it to `/Users/andrewwsymons/Downloads` (deliberately outside the workspace). The developer will install it from there into Zotero. 
+      - If you find an `.xpi` file in the workspace, ignore it; it contains exactly the same as `/dist` so there is no need to check inside it. 
