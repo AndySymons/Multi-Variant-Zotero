@@ -1,0 +1,27 @@
+/* MVZ Plugin - Item Pane styling
+ * (SPECIFICATION_MVZ1_PLUGIN.md > "MVZ pane layout and interaction":
+ * "The MVZ plugin must use the same font, styles etc and the item pane.")
+ * Uses Zotero's own CSS variables where available so the pane inherits the
+ * host font/colours; falls back to sensible neutral values otherwise.
+ */
+
+.mvz-field-group { display: flex; flex-direction: column; background: var(--material-background, #f5f5f5); margin-bottom: 2px; }
+.mvz-field-group.mvz-blank { opacity: 0.5; }
+
+.mvz-row { display: flex; align-items: center; gap: 6px; padding: 2px 6px; }
+.mvz-row-label { flex: 0 0 120px; font-weight: 600; }
+.mvz-row-value { flex: 1; background: #fff; border: 1px solid transparent; padding: 2px 4px; }
+.mvz-row-value.mvz-clickable { cursor: pointer; border-color: #ccc; }
+.mvz-row-buttons { display: flex; gap: 2px; }
+.mvz-row-buttons button { padding: 0 6px; }
+
+.mvz-variant-row .mvz-type-indicator { flex: 0 0 20px; text-align: center; }
+.mvz-variant-row .mvz-row-tag { flex: 0 0 140px; }
+.mvz-variant-value { flex: 1; border: 1px solid #ccc; background: #fff; }
+.mvz-row-delete { flex: 0 0 auto; }
+
+.mvz-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; z-index: 10000; }
+.mvz-modal-dialog { background: #fff; border-radius: 4px; padding: 16px; min-width: 320px; max-height: 80vh; overflow: auto; }
+.mvz-picker-search { width: 100%; margin-bottom: 8px; }
+.mvz-picker-row { padding: 4px; cursor: pointer; }
+.mvz-picker-row:hover { background: #eef; }

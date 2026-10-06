@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "id": "multi-variant-zotero@andysymons.github.io",
+  "name": "Multi-Variant Zotero",
+  "version": "1.0.0-alpha.2",
+  "description": "Multi-variant language and script support for bibliographic metadata.",
+  "homepage_url": "https://github.com/AndySymons/Multi-Variant-Zotero",
+  "icons": {
+    "48": "icon.png"
+  },
+  "applications": {
+    "zotero": {
+      "id": "multi-variant-zotero@andysymons.github.io",
+      "strict_min_version": "10.0",
+      "strict_max_version": "10.0.*",
+      "update_url": "https://github.com/AndySymons/Multi-Variant-Zotero/releases/latest/download/update.json"
+    }
+  },
+  "author": "Andy Symons"
+}
