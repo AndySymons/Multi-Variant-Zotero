@@ -1,10 +1,10 @@
 # AGENT RULES 
 
-Draft 1
+Draft 3
 
 Andrew Symons
 
-26-Sep-2026
+04-Oct-2026
 
 
 
@@ -121,3 +121,11 @@ The version sting must be available and written to headers of any output files f
 
 
 
+# Output packaging rules
+
+1. The folder `/mvz1_package` is entirely for your use. 
+   - Move into here what you need to include in the final `.xpi` package 
+   - Delete anything here that you no  longer need 
+   - The originals on which you based the package are preserved in `/src`, which you should not touch.  
+2. The file `multi-variant-zotero.xpi` in the root folder is simply your zip of `/mvz1_package` from the last version, which I used to instal in Zotero. 
+   - You may therefore simply delete/overwrite this file with each new version. There is no need to check inside it. 
