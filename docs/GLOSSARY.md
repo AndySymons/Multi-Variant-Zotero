@@ -14,8 +14,6 @@ Andrew Symons
 
 -----
 
-
-
 # Introduction 
 
 This document defines the rules for the use of written (human) language in all the documents in the MVZ suite.
@@ -93,7 +91,7 @@ In case of ambiguity, use of a term is to be clarified with the document author 
 | Developer                | The (human) person or persons creating and maintaining the MVZ suite. The AI Agent acts as programmer and takes its instructions from the developer. |
 | Embedded notes           | A facility in Jurism 6 (based on Zotero 6) to include “Notes” inside a child item.  This is deprecated in Zotero 10, so embedded notes are migrated to new ordinary notes “Note” - a separate child item that is Related to the child it came from. |
 | Extra                    | A specific field in the Jurism and Zotero databases into which custom tags can be written. |
-| Extra tag                | A key-value pair written into the Zotero *Extra* field in text form separated by a colon and a space; <br />e.g. `mvz/l/title/en-GB: Much Ado About Nothing`. |
+| Extra tag                | A key-value pair written into the Zotero *Extra* field in text form separated by a colon and a space. |
 | Extractor                | The JZM extractor program.                                   |
 | Field                    | A Jurism or Zotero field in the database, or as presented on the screen. |
 | GitHub                   | A cloud-based web platform for software code sharing and collaborative development. |
