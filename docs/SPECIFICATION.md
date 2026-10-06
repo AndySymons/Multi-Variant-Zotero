@@ -1,10 +1,10 @@
 # SPECIFICATION – MVZ PLUGIN
 
-Draft 19 
+Draft 20 
 
 Andrew Symons 
 
-04-Oct-2026 
+05-Oct-2026 
 
 
 
@@ -135,6 +135,16 @@ multi-variant-zotero.xpi				<--- before packaging: mvz1_package
 2. The version of the icon with the required 48x48 pixel count, selected and re-named to be compatible with the manifest. 
 3. The locale files: two to start with but all when going into production
 4. Whatever Javascript code segments are required to meet these specifications 
+
+## Locale registration
+
+Do NOT use `chrome://` URIs, chrome.manifest, or `chrome://mvz/locale/... paths`. These are legacy constructs from older Firefox/Zotero versions and are invalid for Zotero 10.
+
+Register Fluent (.ftl) files directly from the extension's root/relative path using Zotero 10's standard localisation loading methods (e.g., `locale/en-US/mvz.ftl`).
+
+Ensure all Fluent localisation tokens retain the strict `MVZ_` namespace prefix. 
+
+
 
 ## Version update propagations 
 
@@ -375,6 +385,7 @@ Steps are taken to ensure that no action in either of these panes can disrupt MV
 1. If the user edits the language field in either pane, a popup acts as a guide so that the resulting field is always MVZ compliant. See **Language Popup**. 
 2. If the user deletes a creator in either pane a listener ensures that the related variants are brought into line. See **Creator Listener **.    
 3. The Extra field is not accessible though the MVZ pane, but if the user edits it directly from the Zotero pane, a listener ensuite that the MVZ tags are preserved. See **Extra Field Listener**.
+4. The fields *Date Added* and [date] *Modified* are Zotero system fields that the user cannot edit. These should be made read-only in the MVZ pane. 
 
 ​    
 
@@ -1694,3 +1705,15 @@ mvz/place/29/S/zh-Hant-t-zh-Hans-m0-unihan: 北京
 
 
 
+# Appendix 4 -  technical notes 
+
+Miscellaneous, unsorted information obtained during testing: 
+
+1. Pane markup is an XHTML fragment wrapped in a `<div>`.
+2. Scripts run before the markup is inserted, in a sandbox over the preferences window.
+3. Creators are {`fieldMode`, `firstName`, `lastName`, `creatorTypeID`}
+   - a single-field creator's name is in `lastName`. 
+4. Info-pane controls are `editable-text[fieldname=…]` inside `.meta-row`.
+5. Fluent files in `locale/` register automatically, and `insertFTLIfNeeded('mvz.ftl')` works with no registration.
+6. `Localization.sys.mjs` and `L10nRegistry.sys.mjs` are not importable in 10.0.5.
+7. r`egisterSection` returns false for a duplicate paneID. This also explains the stale panes.
