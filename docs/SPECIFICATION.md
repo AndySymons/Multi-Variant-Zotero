@@ -1,6 +1,6 @@
 # SPECIFICATION – MVZ PLUGIN
 
-Draft 17 
+Draft 19 
 
 Andrew Symons 
 
@@ -237,7 +237,7 @@ The middle column is for **values**:
 2. If single name switch off: 
    - two boxes separated by a comma: 
    - Prompts “(last name)” and “(first name)” displayed in pale grey font inside
-   - User types the actual names over them, which appears in black font. 
+   - User types the actual names over them, which appears in black font.  
 
 ### Right column 
 
@@ -297,13 +297,13 @@ The middle column is for **values**:
 
 The key difference with the Zotero pane is that the MVZ pane can add variants. 
 
-A variant to a field is added by right-clicking the field name in the left hand column. 
+A variant to a field is added by *right*-clicking the field name in the left hand column. 
 
-- If the user clicks on a the name of a base field that cannot have variants, then a message is displayed “Variants cannot be added to { $field_name }”.   
+- If the user right-clicks on a the name of a base field that cannot have variants, then a message is displayed “Variants cannot be added to { $field_name }”.   
 
-- If the user clicks on a the name of a base field that can have variants, a ‘’shortlist’ menu pops up, which has two columns of language and script tags that are defined in the preferences. 
+- If the user right-clicks on a the name of a base field that can have variants, a ‘’shortlist’ menu pops up, which has two columns of language and script tags that are defined in the preferences. 
    - This is described in **Shortlist Dropdown Preferences** 
-- Clicking on any option immediately opens a variant on the next line if this is the first, or after any existing variants otherwise. 
+- Left-clicking on any option in that popup window immediately opens a variant on the next line of the item pane if this is the first, or after any existing variants otherwise. 
    - The variant value box (middle column) is is in the same style as the corresponding base field styles described above 
       - For regular fields: 
          - one wide box 
@@ -314,7 +314,9 @@ A variant to a field is added by right-clicking the field name in the left hand 
    - To the left of the value box(es) the variant is labelled, under the base field name, and in a smaller font, with: 
       - The language tag selected from the shortlist, right justified
       - The type letter `L` or `S`
-- To cancel adding a variant, simply click anywhere outside the popup.  
+- To cancel adding a variant, simply left-click anywhere outside the popup.  
+
+The UI must prevent adding an L-type (translation) variant for any language tag already listed in the item's `Language` field, or an S-type (transliteration) variant for any script tag matching the explicit or implied script of those item languages. 
 
 #### Example (rough sketch) 
 
@@ -330,7 +332,8 @@ A variant to a field is added by right-clicking the field name in the left hand 
 - Left column 
 
    - Major labels: “Item Type”, “Title”, and “Author”: larger font, grey 
-   - “Author `▼`” if clicked shows a drop-down ”Editor”, “Contributor”, etc.) 
+   - “Author `▼`” if left-clicked shows a drop-down ”Editor”, “Contributor”, etc.) 
+      - *Right*-click to add a variant 
 
    - Minor labels: language tags and S/L: smaller font, same grey
 
@@ -396,7 +399,7 @@ Ensures that the user cannot corrupt MVZ tags by editing them, by hand.
 #### When the user enters the *Extra* field:
 
 1. a popup message appears over the box “Warning: edits to MVZ tags will be ignored”. 
-2. The window is locked open, blocking any further action anywhere in the MVZ pane, until the user clicks “Understood”; then
+2. The window is locked open, blocking any further action anywhere in the MVZ pane, until the user left-clicks “Understood”; then
 3. The plugin caches all the `mvz/` lines from the Extra field in memory. 
 4. The cursor is left in the Extra field where the user put it/   
 5. The popup is closed.  
@@ -410,9 +413,35 @@ Ensures that the user cannot corrupt MVZ tags by editing them, by hand.
 
 #  Language field popup
 
-If the user clicks on or selects the Language field in the Zotero main pane, the MVZ plugin pops up a panel with a common list of languages, which can be edited described below (**Common UI**). 
+If the user left-clicks on or selects the Language field in the Zotero main pane, the MVZ plugin pops up its own editing pane, to limit what the user can enter. 
 
- 
+The field is treated as a comma separated list. 
+
+Each item on the list (if there are more than one) is displayed on a separate line. 
+
+If the filed was written by MVZ, this will be a list of valid BCP-47 codes comprising 
+
+`<langUage>[-<Script>][-<REGION>]`   
+
+If the field was written by another program, e.g. if the item was imported, or if the MVZ plugin has just been installed and this item has not yet been dealt with, it could contain other values. 
+
+Any value on the list that is not a standard BCP-47 code is highlighted in red and followed bye the text “Not a recognised language”. 
+
+The user can 
+
+- Click a “-” button next on the same line to delete a language (or invalid code) from the list 
+- Click a “+” button at the bottom to add a new language to the list 
+- Click on an existing language (or invalid code) to edit it. 
+- In case of adding or editing, the user is guided to the **Common language/script editor** described below. 
+
+Unrecognised codes and punctuation are not removed, but will not carry any semantic meaning for MVZ. 
+
+ Finbally the user clicks: 
+
+- “OK” to save the edited Language field to the database as a comma-separated list 
+- “Cancel” to ignore all changes made this window and leave the language field as it was before
+
+   
 
 # Preferences
 
@@ -420,7 +449,7 @@ The plugin registers a single root Preference Pane in the Zotero Settings sideba
 
 To avoid excessive vertical scrolling, the pane is subdivided internally using a **Tabbed Sub-pane Architecture** (Horizontal Navigation Tabs). 
 
-### Navigation Structure
+## Navigation Structure
 
 - **Container Type:** Internal HTML/XHTML view with horizontal tab navigation.
 - **Settings Tabs (Sub-panes):**
@@ -430,7 +459,7 @@ To avoid excessive vertical scrolling, the pane is subdivided internally using a
    2. `[ Field inclusion matrix ]` 
    3. `[ Script and Language drop downs ]` 
 
-#### Implementation Rules 
+### Implementation Rules 
 
 - **No Native Multi-Pane APIs:** Do NOT attempt to register multiple root sidebar items via `manifest.json`.
 - **Dynamic View Switching:** Implement tabs inside the single setting XHTML file (`preferences.xhtml`) using standard CSS/JS event handlers (e.g., hidden/visible `div` sections controlled by a tab-bar menu).
@@ -701,13 +730,16 @@ Original “Transliteration” [“Translation”]
 
 While MVZ Plugin allows variants (translations and transformations) for practically all free text fields, not all institutions or publishers want to see them in citations. For example, many find it unnecessary to translate the name of a publisher, while most will want item title and container title translated. Some want to see the original script field after the transliterated field, some do not.  These citation inclusion preferences allows these choices to be made without having to edit any variants. 
 
-This sub-pane is a table like this. It lists all fields that can have variants (see appendix 1) 
+To form this list 
 
-The field names are the UI locale and sorted alphabetically according to the conventions of that language. 
+1. List all fields that can have variants (see appendix 1) 
+2. Use the local files to translate into the local language 
+3. Sort according to the local language 
+4. Remove duplicates in the display, but retain the mapping from locale name to the database fields so that any single matrix option applies to all the database fields that translate to the same name. 
 
-Tick at least one in each row. 
+The user must tick at least one in each row. 
 
-For creators, only one can be ticked.  
+For creators, only one can be ticked.   
 
 | Fields                         | Original  | Transliteration | Translation |
 | ------------------------------ | :-------: | :-------------: | :---------: |
@@ -799,100 +831,42 @@ If Orig. is ticked but Trans. Is not, then the Original will appear as the main 
 
 ## Script and language dropdown shortlists 
 
-The preference pane defines the shortlists that are popped up when the user adds or edits a variant. 
+This preference pane defines the shortlists that are popped up when the user adds or edits a variant. 
 
-The edit pane is similar the shortlist popup itself: 
+The edit pane is similar to the shortlist popup itself: 
 
-- Two columns, the left one headed “L-Type”, the right one headed “S-Type”
-- Under these headings the list of options added so far, each a BCP-47 code 
-   - The column should be wide enough to accommodate a full BCP-47 code with `t-` and `m0-` extensions
-- Under that one of the texts: 
-   - If no  
-   - If there are none yet defined, a text is displayed “to define variant types go to preferences” 
-   - If there is one of more in either column, a text is displayed “to edit variant types go to preferences” 
+- Two columns
 
-xxx
+   - the left one headed “L-Type”
+   - the right one headed “S-Type”
+- Under these headings are the lists of options for each type added so far (if any), as BCP-47 codes
+- The user can 
 
+   - Click a “-” button next on a line with an existing option to delete that option from the list 
+   - Click a “+” button at the bottom to add a new option to the list 
+   - Click on an existing line to edit it. 
+- In case of adding or editing, the user is guided to the **Common language/script option editor** described below. 
+- Under the lists, one of the texts: 
 
+   - If there are zero options:
+      -  “to add variant types to these lists go to preferences” 
 
-Unlike Jurism, MVZ uses separate lists, applied to S- or L- type variants. 
+   - If there is one or more option in either column: 
+      - “to edit these variant types go to preferences” 
 
-They both have the same format and used the Common script/language list described below. 
-
-
-
-
-
-
+As soon as an option is added, edited, or deleted, the next add variant popup will show the new status of the lists. 
 
 
 
 # Common UI elements
 
-## Script/language list
-
-These are used for: 
-
-- The item language field editor, for each language selected
-- The script and language dropdown shortlists, for each row  
-- The transliteration model preferences, for each model (grouped by script-script pair) 
-
-In all cases a row in the list comprises a BCP-47 tag and an explanation in the UI language.  
-
-A BCP-47 tag in its complete form comprises:
-
-```
-<language>-<script>-<region>-<t>-<Language>-<script>-<region>-<method type>-<method>
-```
-
-Which part is mandatory, optional, automatic, or not used at all - depending on which list it is. 
-
-1. The language field editor shows a list of languages in which the source item is written. There will typically be one only row, but multilingual sources are catered for. 
-   - Language is mandatory. 
-   -   `<script>` is optional and only needed if 
-      - The language permits more than one e.g. Chinese can be traditional or simplified (`zh-Hans`, `zh-Hant`); Serbian can be Cyrillic or Latin (`sr-Cyrl`, `sr-Latn`)
-      - The item is very unusual in being written in a script not morally used for the language, e.g. a Russian item  entirely transliterated into a latin script would have a `ru-Latn` tag. 
-      - In all other cases the script is automatically completed to the default for the language: `en-Latn`, `fr-Latn`, `de-Latn`, `el-Grek`, `ru-Cyrl`, etc.  
-   - `<Region>` can be added for documentary purposes or if relevant to translations
-   -  The whole `-t-` extension is optional, if relevant at all; it would indicate that the entire item is a transliteration or translation from another item; e.g. an English translation of War and Peace could have a tag `en-Latn-US-t-re-Cyrl-RU`, meaning that it is a US English,  latin script translation of a Russian original (as used in Russia) written in Cyrillic script. 
-2. For the script variant dropdown shortlist: 
-   - Script is mandatory 
-   - Language is only added if 
-      - a) there are variations on the script that are language-dependent 
-      - b) there might well be different variants in the same script for the same item
-   - Region is only added in the unlikely circumstances that scrips and language are still not sufficient (no example comes to mind!)
-   - The `-t-` extension is NOT used in this case 
-3.   For the language variant dropdown shortlist: 
-   -   `<script>` is optional and only needed if 
-      - The language permits more than one e.g. Chinese can be traditional or simplified (`zh-Hans`, `zh-Hant`); Serbian can be Cyrillic or Latin (`sr-Cyrl`, `sr-Latn`)
-      - The item is very unusual in being written in a script not morally used for the language, e.g. a Russian item  entirely transliterated into a latin script would have a `ru-Latn` tag. 
-      - In all other cases the script is automatically completed to the default for the language: `en-Latn`, `fr-Latn`, `de-Latn`, `el-Grek`, `ru-Cyrl`, etc.  
-   - `<Region>` can be added for documentary purposes or if relevant to translations
-   - The `-t-` extension is NOT used in this case 
-
-
-
-In all cases the UI interaction is 
-
-- Displays a list of what is currently selected (if any) 
-- “+” button at the bottom to add to the list 
-- Drag rows to re-order the list
--  “-” button on each row to delete that row 
-- Clicking in the row enables it to be edited
-
-Editing is with the common script/language editor… 
-
-
-
-## Script/language tag editor
+## Common language/script option editor
 
 This common UI spec is used where there is a requirement to edit a single script/language field:    
 
-- The selection of a script for an S- variant 
-- The selection of a language for an L-variant 
 - The item Language field editor, for each language in the list
-- The script dropdown shortlist, for each row   
-- The language dropdown shortlist, for each row   
+- The language dropdown shortlist column, for each row   
+- The script dropdown shortlist column, for each row   
 
 The principle is to always use context-sensitive dropdown lists; i.e. lists that are tailored to items that are allowed AND not already selected in the same list. 
 
@@ -904,122 +878,19 @@ The tag is built according to BCP-47.
 
 The dialogue starts with the mandatory items 
 
-1.  In a selection of a script for an S-variant, or editing an item in the script dropdown shortlist 
+1.  In a selection of a script: 
    - First: **the list of all possible scripts**; select by scrolling or typing  
    - If the user wants to add a language, the list of languages in that script is shown 
    - If the user wants to add a region, the list of regions in the selected script and language is shown 
-2. In a selection of a language for an L-variant, or editing an item in the language dropdown shortlist 
+2. In a selection of a language:
    - First: **the list of all possible languages;** select by scrolling or typing 
    - If the user wants to add a region, the list of regions in the selected script and language is shown 
    - If a script is needed (because there is no single default): the list of available scripts for the language
    - If the user wants to add/override a script: the list of all scripts
-3. In the selection of a method preference for transliteration 
-   - First: for the ‘to’ script:  **the list of all possible scripts**; select by scrolling or typing 
-   - Then: for the ‘from’ script:  **the list of all possible scripts** except the ‘to’ script; select by scrolling or typing 
-   - Then:  the list of all transliteration methods for the from-script to to-script pair. 
-   - If the user wants to add a to/from language: the list of languages for the corresponding to/from script  
-   - If the user wants to add a to/from region, the list of regions for the corresponding to/from language 
 
-The UI must prevent adding an L-type (translation) variant for any language tag already listed in the item's `Language` field, or an S-type (transliteration) variant for any script tag matching the explicit or implied script of those item languages. 
 
-### The item Language field cleaner
 
-Zotero allows the Language Field to take any value; it can include more than one language and any kind of description. It is however important for MVZ, that there be just one language, and that it be in BCP 47 format `<language>-{Script}-{REGION}` codes.  - e.g. `es`, `pt-BR`, `en`, `en-US`, `sr-Latn-SR`  
 
-This language code is  essential as a reference for the processing of Jurism variants, so the Language Field must be clean before any variants can be added for the item. 
-
-The Language field should be ‘clean’ if it was created by MVZ or JZM, but might not be the case if the user has just installed the MVZ plugin onto an existing library, or has just imported items from elsewhere. 
-
-Blank counts as ‘clean’, but MVZ will prompt the user to specify a language before a variant is added.   
-
-#### Language field extraction algorithm
-
-##### 1. Normalise punctuation
-
-- Treat commas (`,`), semicolons (`;`), slashes (`/`), and vertical bars (`|`) as explicit hard boundary delimiters. Split the raw string by these delimiters first into primary segments.
-- Do **NOT** split on hyphens (`-`), underscores (`_`), or parentheses (`(...)`). These must remain intact within their surrounding words.
-
-###### 2. Split word boundaries  
-
-- Within each primary segment, split whitespace into a sequential list of clean word tokens.
-
-##### 3. Greedy right-to-left windowed matching protocol
-
-Because multi-word language descriptions (like `"Brazilian Portuguese"`) contain spaces, evaluate token sequences using a Greedy Longest-Match First (N-gram Window) algorithm over the sequence of tokens: 
-
-1. Window Sizing: Start with a window size $W = \min(\text{remaining tokens}, 4)$.
-2. Match Evaluation:
-   - Take the first $W$ adjacent tokens and join them with spaces (e.g., `"Brazilian Portuguese"`).
-   - Pass this combined candidate phrase to `langcodes.find()`.
-3. If a single token with the hyphen separators (looks like a BCP-47 code) fails, then the Language tag validation reduction algorithm above is applied.  
-4. Branching Logic:
-   - If `langcodes` succeeds and returns a valid BCP-47 tag:
-      - Record the normalized BCP-47 tag (e.g., `pt-BR` or `tr-CY`).
-      - Advance the processing position forward by $W$ tokens.
-      - Reset $W$ back to the maximum window size (4).
-   - If `langcodes` fails:
-      - Decrement the window size $W = W - 1$.
-      - Repeat step 2 with the smaller candidate phrase (e.g., trying `"Brazilian"` alone).
-5. Unrecognised token catchall:
-   - If the window size drops to $W = 1$ and `langcodes.find()` still fails (e.g., for `"gobbledegook"` or `"dinglish"`):
-      - Log the single token as an Unrecognized Language anomaly  
-      - Advance the processing position forward by 1 token.
-      - Reset $W$ back to maximum.
-
-#### Worked example 1
-
-Suppose the input is: 
-
-```
-gobbledegook fr-FR German dinglish Türkçe (Kıbrıs) it Brazilian Portuguese
-```
-
-1. Window 4:` `"`gobbledegook fr-FR German dinglish`" $\rightarrow$Fail
-   - Window 3: "`gobbledegook fr-FR German`" $\rightarrow$ Fail
-   - Window 2: "`gobbledegook fr-FR`" $\rightarrow$  Fail
-   - Window 1: “`gobbledegook`"  $\rightarrow$  Fail
-      -  $\rightarrow$ Log anomaly: unrecognised language:  `gobbledegook`. 
-      -  Move forward 1 token. 
-2. Window 4: "`fr-FR German dinglish Türkçe`" $\rightarrow$ Fail
-   - Window 3: "`fr-FR German dinglish`" $\rightarrow$ Fail
-   - Window 2: "`fr-FR German`"  $\rightarrow$ Fail
-   - Window 1: “`fr-FR`" $\rightarrow$ Success
-      -  $\rightarrow$ Output: `fr-FR`. 
-      -  No anomaly
-      -  Move forward 1 token.
-3. Window 4: "`German dinglish Türkçe (Kıbrıs)`" $\rightarrow$ Fail
-   - Window 3: "`German dinglish Türkçe`" $\rightarrow$ Fail
-   - Window 2: "`German dinglish`" $\rightarrow$ Fail
-   - Window 1: "`German`" $\rightarrow$ Success 
-      - $\rightarrow$ Output: `de`
-      - Log anomaly normalised language 
-      - Move forward 1 token.
-4. Window 4: “`dinglish Türkçe (Kıbrıs) it` “  $\rightarrow$ Fail
-   - Window 3: “`dinglish Türkçe (Kıbrıs)` “  $\rightarrow$ Fail
-   - Window 2: “`dinglish Türkçe` “  $\rightarrow$ Fail
-   - Window 1: “`dinglish` “  $\rightarrow$ Fail
-      - Log anomaly: unrecognised language: `dinglish`. 
-      - Move forward 1 token.
-5. Window 4: "`Türkçe (Kıbrıs) it Brazilian`” $\rightarrow$ Fail
-   - Window 3: "`Türkçe (Kıbrıs) it`” $\rightarrow$ Fail
-   - Window 2: "`Türkçe (Kıbrıs)`” $\rightarrow$ Success
-      -  $\rightarrow$ Output: `tr-CY`. 
-      -  Move forward 2 tokens.
-6. Window 3 (only three left): ”`it Brazilian Portuguese` “  $\rightarrow$ Fail
-   - Window 2: “`it Brazilian` “  $\rightarrow$ Fail
-   - Window 1: “`it` “  $\rightarrow$ Success
-      -  $\rightarrow$ Output: `it`.
-      -  No anomaly
-      -  Move forward 1 token.
-7. Window 2 (only two left): "`Brazilian Portuguese`"  $\rightarrow$ Success 
-   -  $\rightarrow$ Output: `pt-BR`
-   -  Log anomaly normalised language 
-
-#### Final result
-
-Normalised BCP-47 comma-separated list written to the target:`fr-FR, de, tr-CY, it, pt-BR`
-
-This is a long example to illustrate the process; most items will only have one language; some items genuinely have multiple languages but rarely more than three. 
 
 
 
@@ -1214,24 +1085,24 @@ If the field inclusion matrix specifies that a translation is required, find the
 - **Extra**:  
 
 ```
-mvz/S/title/ru-Latn-alaloc: Master i Margarita
-mvz/S/title/ru-Latn-iso9: Master i Margarita
-mvz/L/title/en-US: The Master and Margarita
-mvz/L/title/de-DE: Der Meister und Margarita
-mvz/L/title/it: Il Maestro e Margherita
-mvz/L/title/pt: O Mestre e Margarida
-mvz/S/creator[0]/Latn-alaloc: Bulgakov || Mikhail
-mvz/S/creator[0]/Latn-iso9: Bulgakov || Mihail
-mvz/L/creator[0]/en: Bulgakov || Mikhail
-mvz/L/creator[0]/de: Bulgakow || Michail
-mvz/L/creator[0]/it: Bulgakov || Michail
-mvz/L/creator[0]/pt: Bulgákov || Mikhail
-mvz/S/creator[1]/Latn-alaloc: Bulgakova || Elena
-mvz/S/creator[1]/Latn-iso9: Bulgakova || Elena
-mvz/L/creator[1]/en: Bulgakova || Elena
-mvz/L/creator[1]/de: Bulgakowa || Jelena
-mvz/L/creator[1]/it: Bulgakova || Elena
-mvz/L/creator[1]/pt: Bulgakova || Elena
+mvz/title/0/S/ru-Latn-alaloc: Master i Margarita
+mvz/title/1/S/ru-Latn-iso9: Master i Margarita
+mvz/title/2/L/en-US: The Master and Margarita
+mvz/title/3/L/de-DE: Der Meister und Margarita
+mvz/title/4/L/it: Il Maestro e Margherita
+mvz/title/5/L/pt: O Mestre e Margarida
+mvz/creator[0]/0/S/Latn-alaloc: Bulgakov || Mikhail
+mvz/creator[0]/1/S/Latn-iso9: Bulgakov || Mihail
+mvz/creator[0]/2/L/en: Bulgakov || Mikhail
+mvz/creator[0]/3/L/de: Bulgakow || Michail
+mvz/creator[0]/4/L/it: Bulgakov || Michail
+mvz/creator[0]/5/L/pt: Bulgákov || Mikhail
+mvz/creator[1]/0/S/Latn-alaloc: Bulgakova || Elena
+mvz/creator[1]/1/S/Latn-iso9: Bulgakova || Elena
+mvz/creator[1]/2/L/en: Bulgakova || Elena
+mvz/creator[1]/3/L/de: Bulgakowa || Jelena
+mvz/creator[1]/4/L/it: Bulgakova || Elena
+mvz/creator[1]/5/L/pt: Bulgakova || Elena
 ```
 
 ##### Scenario 1: Target document en-US 
@@ -1249,22 +1120,22 @@ mvz/L/creator[1]/pt: Bulgakova || Elena
 ###### Citation title:
 
 - Transliteration: 
-   - The first encountered transliteration tag is  `mvz/S/title/ru-Latn-alaloc: `
+   - The first encountered transliteration tag is  `mvz/title/0/S/ru-Latn-alaloc: `
    - The correct title transliteration for `en-US` is: **Master i Margarita**
 - Translation: 
-   - Searching the variant tags for translation matches we find: `mvz/L/title/en-US` 
+   - Searching the variant tags for translation matches we find: `mvz/title/2/L/en-US` 
    - The Title translation for `en-US` is **The Master and Margarita**.   
 
 ###### Author (Creator 0):  
 
 - The preferences require Transliteration: 
-   - The first encountered transliteration for creator [0] is `mvz/S/creator[0]/Latn-alaloc:`  
+   - The first encountered transliteration for creator [0] is `mvz/creator[0]/0/S/Latn-alaloc:`  
    - The transliterated name is: **Bulgakov || Mikhail**
 
 ###### Editor (Creator 1):
 
 - The preferences require Transliteration:
-   - The first encountered transliteration for creator [1] `mvz/S/creator[1]/Latn-alaloc:` 
+   - The first encountered transliteration for creator [1] is `mvz/creator[1]/0/S/Latn-alaloc:` 
    - The transliterated author is: **Bulgakova || Elena**
 
 
@@ -1280,22 +1151,22 @@ mvz/L/creator[1]/pt: Bulgakova || Elena
 ##### Title :
 
 - Transliteration: 
-   - Matches tag `mvz/S/title/Latn-iso9:`
+   - Matches tag `mvz/title/1/S/ru-Latn-iso9:`
    - The transliterated title is **Master i Margarita**
 - Translation): 
-   - Matches `mvz/L/title/de-DE` 
+   - Matches `mvz/title/3/L/de-DE:`
    - The translated title is: **Der Meister und Margarita**   
 
 ##### Author (Creator 0):
 
 - The preferences require translation:  
-   - Matches `mvz/L/creator[0]/de` 
+   - Matches `mvz/creator[0]/3/L/de:` 
    - Translated name: **Bulgakow || Michail** 
 
 ##### Editor (Creator 1):
 
 - The preferences require translation:  
-   - Matches `mvz/L/creator[1]/de` 
+   - Matches `mvz/creator[1]/3/L/de:` 
    - Translated name: **Bulgakowa || Jelena**
 
 
