@@ -78,6 +78,7 @@ MVZ_PICK_ADD_REGION = Adicionar uma região
 MVZ_PICK_ADD_SCRIPT = Adicionar / substituir uma escrita
 MVZ_SEARCH_PLACEHOLDER = Escreva para pesquisar…
 MVZ_LIST_ADD_BUTTON = +
+MVZ_CHANGE_BUTTON = Alterar
 MVZ_LIST_REMOVE_BUTTON = -
 MVZ_LANGUAGE_ALREADY_IN_ITEM = "{ $language_tag }" já consta do campo Idioma deste item; uma variante de tradução é desnecessária.
 MVZ_SCRIPT_ALREADY_IN_ITEM = "{ $script_tag }" corresponde à escrita deste item; uma variante de transliteração é desnecessária.

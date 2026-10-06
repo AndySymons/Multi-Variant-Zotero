@@ -15,7 +15,7 @@
 
 if (!Zotero.MVZ) Zotero.MVZ = {};
 
-Zotero.MVZ.VERSION = '1.0.0-alpha.3';
+Zotero.MVZ.VERSION = '1.0.0-alpha.4';
 
 Zotero.MVZ.Core = (function () {
 	'use strict';
@@ -147,7 +147,7 @@ Zotero.MVZ.Core = (function () {
 	//   suffix = a BCP-47-like tag (incl. optional -t-/-m0- extensions)
 	// -----------------------------------------------------------------
 
-	const MVZ_LINE_RE = /^mvz\/([^/]+)\/(\d+)\/([LS])\/([^:]+):[ ](.*)$/;
+	const MVZ_LINE_RE = /^mvz\/([^/]+)\/(\d+)\/([LS])\/([^:]+):(?: (.*))?$/;
 	const CREATOR_BODY_RE = /^creator\[(\d+)\]$/;
 
 	/**
@@ -180,7 +180,7 @@ Zotero.MVZ.Core = (function () {
 				creatorIndex: creatorMatch ? parseInt(creatorMatch[1], 10) : null,
 				variantIndex: parseInt(vIndex, 10),
 				tag: tag,
-				value: value
+				value: value || ''
 			});
 		});
 

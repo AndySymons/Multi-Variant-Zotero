@@ -2,8 +2,8 @@
  * MVZ Plugin - Settings pane controller
  * (SPECIFICATION_MVZ1_PLUGIN.md > "Preferences (Settings)")
  *
- * Loaded as a <script> by content/preferences.xhtml. Runs in the Zotero
- * preferences window, where `Zotero` and `window` are both available.
+ * Loaded through the `scripts` option of Zotero.PreferencePanes.register (bootstrap.js).
+ * Runs in a sandbox whose prototype is the Zotero preferences window.
  */
 
 /* global Zotero, window, document */
@@ -21,8 +21,8 @@
 	function el(tagName) { return Core.createElement(document, tagName); }
 
 	function localizeStaticLabels(root) {
-		root.querySelectorAll('[data-l10n-id]').forEach(function (el) {
-			el.textContent = I18n.t(el.getAttribute('data-l10n-id'));
+		root.querySelectorAll('[data-mvz-l10n]').forEach(function (el) {
+			el.textContent = I18n.t(el.getAttribute('data-mvz-l10n'));
 		});
 	}
 
@@ -180,9 +180,9 @@
 		});
 	}
 
-	function init() {
-		const root = document.getElementById('mvz-settings-root');
-		if (!root) return;
+	function init(root) {
+		if (root.__mvzInitialised) return;
+		root.__mvzInitialised = true;
 		localizeStaticLabels(root);
 		initTabs(root);
 		initTargetDocument(root);
@@ -190,9 +190,19 @@
 		initShortlists(root);
 	}
 
-	if (document.readyState === 'loading') {
-		document.addEventListener('DOMContentLoaded', init);
-	} else {
-		init();
-	}
+	// Zotero runs a pane's scripts BEFORE it inserts the pane markup (preferences.js
+	// _loadPane), so wait for the markup to appear.
+	let attempts = 0;
+	(function waitForMarkup() {
+		const root = document.getElementById('mvz-settings-root');
+		if (root) {
+			try {
+				init(root);
+			} catch (e) {
+				Zotero.logError(e);
+			}
+			return;
+		}
+		if (++attempts < 200) setTimeout(waitForMarkup, 50);
+	})();
 })();

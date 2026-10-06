@@ -91,6 +91,7 @@ MVZ_PICK_ADD_REGION = Add a region
 MVZ_PICK_ADD_SCRIPT = Add / override a script
 MVZ_SEARCH_PLACEHOLDER = Type to search…
 MVZ_LIST_ADD_BUTTON = +
+MVZ_CHANGE_BUTTON = Change
 MVZ_LIST_REMOVE_BUTTON = -
 MVZ_LANGUAGE_ALREADY_IN_ITEM = "{ $language_tag }" is already in this item's Language field; a translation variant is unnecessary.
 MVZ_SCRIPT_ALREADY_IN_ITEM = "{ $script_tag }" matches this item's script; a transliteration variant is unnecessary.

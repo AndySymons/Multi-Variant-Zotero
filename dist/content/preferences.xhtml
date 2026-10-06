@@ -1,78 +1,63 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!--
-  MVZ Plugin - Settings pane
-  (SPECIFICATION_MVZ1_PLUGIN.md > "Preferences (Settings)")
-
-  Registered as a Zotero 7+/10 Preference Pane (see bootstrap.js). Per the
-  specification's "Implementation Rules": a single root pane, subdivided
-  internally using plain HTML/CSS/JS tab navigation (no additional root
-  sidebar items, no native multi-pane APIs).
--->
-<div xmlns="http://www.w3.org/1999/xhtml" id="mvz-settings-root">
-	<link rel="stylesheet" href="chrome://mvz/content/mvz-preferences.css" />
-
+<div id="mvz-settings-root">
 	<div class="mvz-tab-bar">
-		<button type="button" class="mvz-tab-button" data-tab="targetDocument" data-l10n-id="MVZ_TAB_TARGET_DOCUMENT"></button>
-		<button type="button" class="mvz-tab-button" data-tab="fieldInclusion" data-l10n-id="MVZ_TAB_FIELD_INCLUSION"></button>
-		<button type="button" class="mvz-tab-button" data-tab="scriptLanguageLists" data-l10n-id="MVZ_TAB_SCRIPT_LANGUAGE_LISTS"></button>
+		<button type="button" class="mvz-tab-button" data-tab="targetDocument" data-mvz-l10n="MVZ_TAB_TARGET_DOCUMENT"></button>
+		<button type="button" class="mvz-tab-button" data-tab="fieldInclusion" data-mvz-l10n="MVZ_TAB_FIELD_INCLUSION"></button>
+		<button type="button" class="mvz-tab-button" data-tab="scriptLanguageLists" data-mvz-l10n="MVZ_TAB_SCRIPT_LANGUAGE_LISTS"></button>
 	</div>
 
-	<!-- Tab 1: Target document characteristics -->
 	<div class="mvz-tab-panel" data-tab-panel="targetDocument">
 		<section>
-			<label data-l10n-id="MVZ_TARGET_LANGUAGE_LABEL"></label>
+			<label data-mvz-l10n="MVZ_TARGET_LANGUAGE_LABEL"></label>
 			<span id="mvz-target-language-value"></span>
-			<button type="button" id="mvz-target-language-change" data-l10n-id="MVZ_LIST_ADD_BUTTON"></button>
+			<button type="button" id="mvz-target-language-change" data-mvz-l10n="MVZ_CHANGE_BUTTON"></button>
 		</section>
 
 		<section>
-			<h3 data-l10n-id="MVZ_STYLE_SECTION_LABEL"></h3>
+			<h3 data-mvz-l10n="MVZ_STYLE_SECTION_LABEL"></h3>
 			<div class="mvz-style-options">
-				<label><input type="radio" name="mvz-style" value="apa" /> <span data-l10n-id="MVZ_STYLE_OPTION_APA"></span></label>
-				<label><input type="radio" name="mvz-style" value="cmos" /> <span data-l10n-id="MVZ_STYLE_OPTION_CMOS"></span></label>
-				<label><input type="radio" name="mvz-style" value="mla" /> <span data-l10n-id="MVZ_STYLE_OPTION_MLA"></span></label>
-				<label><input type="radio" name="mvz-style" value="mhra" /> <span data-l10n-id="MVZ_STYLE_OPTION_MHRA"></span></label>
-				<label><input type="radio" name="mvz-style" value="custom" /> <span data-l10n-id="MVZ_STYLE_OPTION_CUSTOM"></span></label>
+				<label><input type="radio" name="mvz-style" value="apa" /> <span data-mvz-l10n="MVZ_STYLE_OPTION_APA"></span></label>
+				<label><input type="radio" name="mvz-style" value="cmos" /> <span data-mvz-l10n="MVZ_STYLE_OPTION_CMOS"></span></label>
+				<label><input type="radio" name="mvz-style" value="mla" /> <span data-mvz-l10n="MVZ_STYLE_OPTION_MLA"></span></label>
+				<label><input type="radio" name="mvz-style" value="mhra" /> <span data-mvz-l10n="MVZ_STYLE_OPTION_MHRA"></span></label>
+				<label><input type="radio" name="mvz-style" value="custom" /> <span data-mvz-l10n="MVZ_STYLE_OPTION_CUSTOM"></span></label>
 			</div>
-			<label data-l10n-id="MVZ_INCLUDE_ORIGINAL_LABEL"></label>
+			<label data-mvz-l10n="MVZ_INCLUDE_ORIGINAL_LABEL"></label>
 			<div class="mvz-style-options">
-				<label><input type="radio" name="mvz-include-original" value="true" /> <span data-l10n-id="MVZ_INCLUDE_ORIGINAL_YES"></span></label>
-				<label><input type="radio" name="mvz-include-original" value="false" /> <span data-l10n-id="MVZ_INCLUDE_ORIGINAL_NO"></span></label>
+				<label><input type="radio" name="mvz-include-original" value="true" /> <span data-mvz-l10n="MVZ_INCLUDE_ORIGINAL_YES"></span></label>
+				<label><input type="radio" name="mvz-include-original" value="false" /> <span data-mvz-l10n="MVZ_INCLUDE_ORIGINAL_NO"></span></label>
 			</div>
 			<div id="mvz-custom-template-fields" hidden="hidden">
-				<label data-l10n-id="MVZ_STYLE_CUSTOM_STANDALONE_LABEL"></label>
+				<label data-mvz-l10n="MVZ_STYLE_CUSTOM_STANDALONE_LABEL"></label>
 				<textarea id="mvz-custom-standalone"></textarea>
-				<label data-l10n-id="MVZ_STYLE_CUSTOM_CONTAINED_LABEL"></label>
+				<label data-mvz-l10n="MVZ_STYLE_CUSTOM_CONTAINED_LABEL"></label>
 				<textarea id="mvz-custom-contained"></textarea>
 			</div>
 		</section>
 	</div>
 
-	<!-- Tab 2: Field inclusion matrix -->
 	<div class="mvz-tab-panel" data-tab-panel="fieldInclusion" hidden="hidden">
 		<table id="mvz-field-matrix">
 			<thead>
 				<tr>
-					<th data-l10n-id="MVZ_FIELD_MATRIX_COL_FIELD"></th>
-					<th data-l10n-id="MVZ_FIELD_MATRIX_COL_ORIGINAL"></th>
-					<th data-l10n-id="MVZ_FIELD_MATRIX_COL_TRANSLITERATION"></th>
-					<th data-l10n-id="MVZ_FIELD_MATRIX_COL_TRANSLATION"></th>
+					<th data-mvz-l10n="MVZ_FIELD_MATRIX_COL_FIELD"></th>
+					<th data-mvz-l10n="MVZ_FIELD_MATRIX_COL_ORIGINAL"></th>
+					<th data-mvz-l10n="MVZ_FIELD_MATRIX_COL_TRANSLITERATION"></th>
+					<th data-mvz-l10n="MVZ_FIELD_MATRIX_COL_TRANSLATION"></th>
 				</tr>
 			</thead>
 			<tbody id="mvz-field-matrix-body"></tbody>
 		</table>
 	</div>
 
-	<!-- Tab 3: Script and language drop downs -->
 	<div class="mvz-tab-panel" data-tab-panel="scriptLanguageLists" hidden="hidden">
 		<div class="mvz-shortlist-preferences">
 			<section>
-				<label data-l10n-id="MVZ_SCRIPT_SHORTLIST_LABEL"></label>
-				<div id="mvz-script-shortlist"></div>
+				<label data-mvz-l10n="MVZ_SHORTLIST_L_LABEL"></label>
+				<div id="mvz-language-shortlist"></div>
 			</section>
 			<section>
-				<label data-l10n-id="MVZ_LANGUAGE_SHORTLIST_LABEL"></label>
-				<div id="mvz-language-shortlist"></div>
+				<label data-mvz-l10n="MVZ_SHORTLIST_S_LABEL"></label>
+				<div id="mvz-script-shortlist"></div>
 			</section>
 		</div>
 	</div>

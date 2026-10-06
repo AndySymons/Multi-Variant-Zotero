@@ -252,7 +252,7 @@ Zotero.MVZ.Citeproc = (function () {
 	}
 
 	function originalCreatorJSON(creator) {
-		if (creator.fieldMode === 1) return { literal: creator.name || creator.lastName };
+		if (creator.fieldMode === 1) return { literal: creator.lastName || '' };
 		return { family: creator.lastName || '', given: creator.firstName || '' };
 	}
 

@@ -314,6 +314,13 @@ Zotero.MVZ.CommonUI = (function () {
 				});
 				row.appendChild(label);
 
+				if (options.mode === 'language' && !Core.isValidItemLanguageTag(tag)) {
+					const note = el(doc, 'span');
+					note.className = 'mvz-tag-invalid-note';
+					note.textContent = Zotero.MVZ.I18n.t('MVZ_LANGUAGE_UNRECOGNIZED');
+					row.appendChild(note);
+				}
+
 				const removeBtn = el(doc, 'button');
 				removeBtn.className = 'mvz-tag-list-remove';
 				removeBtn.textContent = Zotero.MVZ.I18n.t('MVZ_LIST_REMOVE_BUTTON');

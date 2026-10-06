@@ -32,7 +32,7 @@
  *      element name itself is never stored or duplicated in mvz.ftl.
  */
 
-/* global Zotero, ChromeUtils */
+/* global Zotero */
 
 if (!Zotero.MVZ) Zotero.MVZ = {};
 
@@ -56,42 +56,44 @@ Zotero.MVZ.I18n = (function () {
 		MVZ_CITEPROC_HOOK_UNAVAILABLE_BODY: {}
 	};
 
-	let _l10n = null;
+	const LOCALES = ['en-GB', 'pt-PT'];
+	let _messages = null;
+
+	// Fluent .ftl files are read directly from the add-on (rootURI + locale/<locale>/mvz.ftl)
+	// and parsed here: the MVZ messages are single-line "TOKEN = text { $param }" entries.
+	// (Verified in Zotero 10.0.5: Localization/L10nRegistry modules are not importable.)
+	function pickLocale() {
+		const wanted = Zotero.locale || 'en-GB';
+		if (LOCALES.indexOf(wanted) !== -1) return wanted;
+		const language = wanted.split('-')[0];
+		return LOCALES.find(function (l) { return l.split('-')[0] === language; }) || 'en-GB';
+	}
+
+	function loadMessages() {
+		if (_messages) return _messages;
+		_messages = {};
+		[pickLocale(), 'en-GB'].forEach(function (locale) {
+			try {
+				const text = Zotero.File.getContentsFromURL(Zotero.MVZ.rootURI + 'locale/' + locale + '/mvz.ftl');
+				text.split(/\r?\n/).forEach(function (line) {
+					const match = /^([A-Z][A-Z0-9_]*)\s*=\s*(.*)$/.exec(line);
+					if (match && !Object.prototype.hasOwnProperty.call(_messages, match[1])) _messages[match[1]] = match[2];
+				});
+			} catch (e) {
+				Zotero.logError(e);
+			}
+		});
+		return _messages;
+	}
 
 	function init() {
-		if (_l10n) return _l10n;
-		try {
-			const { Localization } = ChromeUtils.importESModule('resource://gre/modules/Localization.sys.mjs');
-			_l10n = new Localization(['mvz.ftl'], true);
-		} catch (e) {
-			Zotero.logError(e);
-			_l10n = null;
-		}
-		return _l10n;
+		_messages = null;
+		return loadMessages();
 	}
 
-	let _fallbackMessages = null;
-
-	function fallbackMessages() {
-		if (_fallbackMessages) return _fallbackMessages;
-		_fallbackMessages = {};
-		const locale = Zotero.locale || 'en-GB';
-		const candidates = [locale, 'en-GB'];
-		candidates.forEach(function (candidate) {
-			try {
-				const text = Zotero.File.getContentsFromURL('chrome://mvz/locale/' + candidate + '/mvz.ftl');
-				String(text || '').split(/\r?\n/).forEach(function (line) {
-					const match = /^([A-Z][A-Z0-9_-]*)\s*=\s*(.*)$/.exec(line);
-					if (match && !_fallbackMessages[match[1]]) _fallbackMessages[match[1]] = match[2];
-				});
-			} catch (e) {}
-		});
-		return _fallbackMessages;
-	}
-
-	function fallbackValue(token, args) {
-		const template = fallbackMessages()[token];
-		if (!template) return token;
+	function format(token, args) {
+		const template = loadMessages()[token];
+		if (template === undefined) return token;
 		return template.replace(/\{\s*\$([A-Za-z0-9_]+)\s*\}/g, function (match, name) {
 			return Object.prototype.hasOwnProperty.call(args, name) ? String(args[name]) : match;
 		});
@@ -101,14 +103,14 @@ Zotero.MVZ.I18n = (function () {
 
 	function resolveField(fieldName) {
 		try {
-			return Zotero.ItemFields.getLocalizedString(fieldName);
-		} catch (e) {
-			try {
-				return Zotero.ItemFields.getLocalizedString(null, fieldName);
-			} catch (e2) {
-				return fieldName;
-			}
-		}
+			const text = Zotero.ItemFields.getLocalizedString(fieldName);
+			if (text && text !== fieldName) return text;
+		} catch (e) { /* try the next route */ }
+		try {
+			const text = Zotero.getString('itemFields.' + fieldName);
+			if (text && text !== 'itemFields.' + fieldName) return text;
+		} catch (e) { /* fall back to the database name */ }
+		return fieldName;
 	}
 
 	function resolveItemType(itemType) {
@@ -146,24 +148,18 @@ Zotero.MVZ.I18n = (function () {
 	 * @returns {string}
 	 */
 	function t(token, rawParams) {
-		const l10n = init();
 		const declared = PARAM_TYPES[token] || {};
 		const args = {};
 		if (rawParams) {
 			Object.keys(rawParams).forEach(function (name) {
-				const type = declared[name] || 'literal';
-				args[name] = resolveParam(type, rawParams[name]);
+				args[name] = resolveParam(declared[name] || 'literal', rawParams[name]);
 			});
 		}
-
-		if (!l10n) return fallbackValue(token, args); // Defensive fallback - never throw into the UI.
-
 		try {
-			const value = l10n.formatValueSync(token, args);
-			return value === null || value === undefined || value === token ? fallbackValue(token, args) : value;
+			return format(token, args);
 		} catch (e) {
 			Zotero.logError(e);
-			return fallbackValue(token, args);
+			return token;
 		}
 	}
 

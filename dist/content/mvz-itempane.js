@@ -6,6 +6,12 @@
  * The Extra-field and Language-field listeners use Zotero 10 Info-pane
  * markup verified through the Zotero Developer > Run JavaScript DOM query:
  * editable-text[fieldname="extra|language"] inside .meta-row.
+ *
+ * Verified Zotero 10.0.5 facts used here:
+ *  - item.getCreators() entries are { fieldMode, firstName, lastName, creatorTypeID };
+ *    a single-field creator (fieldMode 1) keeps its whole name in lastName.
+ *  - Item has setCreator / setCreators / removeCreator / getCreators.
+ *  - ItemPaneManager.registerSection supplies onInit({refresh}) and onRender({body,item}).
  */
 
 /* global Zotero */
@@ -19,86 +25,54 @@ Zotero.MVZ.ItemPane = (function () {
 	const I18n = Zotero.MVZ.I18n;
 	const CommonUI = Zotero.MVZ.CommonUI;
 
-	// See mvz-core.js "DOM helper" - every element injected into Zotero's
-	// (XUL) main window must be created with an explicit XHTML namespace,
-	// or it silently fails to render.
+	// Every element injected into Zotero's (XUL) main window must be created
+	// with an explicit XHTML namespace (see mvz-core.js "DOM helper").
 	function el(doc, tagName) { return Core.createElement(doc, tagName); }
 
 	const PANE_ID = 'mvz-pane-multi-variant-zotero';
 	const PLUGIN_ID = 'multi-variant-zotero@andysymons.github.io';
+	const READ_ONLY_FIELDS = ['dateAdded', 'dateModified'];
 
-	// Per-item cache of the creator list last seen, used by the Creator
-	// listener to detect which index was removed on a subsequent 'modify'.
-	const _lastCreators = new Map(); // itemID -> [{firstName,lastName,creatorTypeID}, ...]
+	// itemID -> creators as last seen (used by the Creator listener to find a deleted index).
+	const _lastCreators = new Map();
+	// itemID -> { index, creatorTypeID, lastName, firstName, fieldMode } : a blank creator row
+	// that exists only in the MVZ pane until the user types a name (Zotero rejects blank creators).
+	const _pendingCreator = new Map();
+	const _saveTimers = new Map();
+	let _section = null; // { body, item, refresh }
+	let _sectionID = null;
 
 	// -----------------------------------------------------------------
-	// Variant state helpers (read/write via the Extra field)
+	// Variant state (read/written through the Extra field)
 	// -----------------------------------------------------------------
 
 	function loadState(item) {
 		return Core.parseExtra(item.getField('extra') || '');
 	}
 
-	function saveState(item, state) {
-		const newExtra = Core.serializeExtra(state.preserved, state.variants);
-		item.setField('extra', newExtra);
+	// Writes the state into the in-memory item immediately, so every re-render sees it.
+	function applyState(item, state) {
+		item.setField('extra', Core.serializeExtra(state.preserved, state.variants));
+	}
+
+	function saveItem(item) {
 		return item.saveTx().catch(function (e) {
 			Zotero.logError(e);
 			Zotero.alert(null, I18n.t('MVZ_SAVE_ERROR_TITLE'), I18n.t('MVZ_SAVE_ERROR_BODY', { error_message: String(e) }));
 		});
 	}
 
-	const debouncedSave = Core.debounce(function (item, state) {
-		saveState(item, state);
-	}, 300);
+	function saveState(item, state) {
+		applyState(item, state);
+		return saveItem(item);
+	}
 
-	function openVariantShortlist(doc, onSelect) {
-		const overlay = el(doc, 'div');
-		overlay.className = 'mvz-modal-overlay';
-		const dialog = el(doc, 'div');
-		dialog.className = 'mvz-modal-dialog mvz-shortlist-dialog';
-		const columns = el(doc, 'div');
-		columns.className = 'mvz-shortlist-columns';
-		const lists = [
-			{ type: 'l', token: 'MVZ_SHORTLIST_L_LABEL', values: Core.getJSONPref('languageShortlist', []) },
-			{ type: 's', token: 'MVZ_SHORTLIST_S_LABEL', values: Core.getJSONPref('scriptShortlist', []) }
-		];
-		let count = 0;
-		lists.forEach(function (entry) {
-			const column = el(doc, 'div');
-			const heading = el(doc, 'h4');
-			heading.textContent = I18n.t(entry.token);
-			column.appendChild(heading);
-			entry.values.forEach(function (value) {
-				const tag = typeof value === 'string' ? value : value.tag;
-				if (!tag) return;
-				count++;
-				const option = el(doc, 'button');
-				option.type = 'button';
-				option.textContent = tag;
-				option.addEventListener('click', function () {
-					overlay.remove();
-					onSelect(entry.type, tag);
-				});
-				column.appendChild(option);
-			});
-			columns.appendChild(column);
-		});
-		if (!count) {
-			const empty = el(doc, 'p');
-			empty.textContent = I18n.t('MVZ_SHORTLIST_EMPTY');
-			dialog.appendChild(empty);
-		} else {
-			dialog.appendChild(columns);
-		}
-		const help = el(doc, 'p');
-		help.textContent = I18n.t('MVZ_SHORTLIST_EDIT_PREFS');
-		dialog.appendChild(help);
-		overlay.appendChild(dialog);
-		overlay.addEventListener('click', function (event) {
-			if (event.target === overlay) overlay.remove();
-		});
-		doc.documentElement.appendChild(overlay);
+	function scheduleSave(item) {
+		if (_saveTimers.has(item.id)) clearTimeout(_saveTimers.get(item.id));
+		_saveTimers.set(item.id, setTimeout(function () {
+			_saveTimers.delete(item.id);
+			saveItem(item);
+		}, 300));
 	}
 
 	function variantsFor(state, field, creatorIndex) {
@@ -110,9 +84,107 @@ Zotero.MVZ.ItemPane = (function () {
 		});
 	}
 
+	function snapshotCreators(item) {
+		_lastCreators.set(item.id, item.getCreators().map(function (c) {
+			return { firstName: c.firstName, lastName: c.lastName, fieldMode: c.fieldMode, creatorTypeID: c.creatorTypeID };
+		}));
+	}
+
 	// -----------------------------------------------------------------
-	// Ordered list of fields for an item (Appendix 2,
-	// "same order as Zotero shows them in the main item pane").
+	// Menus and panels (real drop-down menus, closed by any outside click)
+	// -----------------------------------------------------------------
+
+	let _closeMenu = null;
+
+	function closeMenu() {
+		if (_closeMenu) _closeMenu();
+	}
+
+	function showFloating(doc, x, y, build) {
+		closeMenu();
+		const box = el(doc, 'div');
+		box.className = 'mvz-menu';
+		box.style.cssText = 'position:fixed;z-index:100000;left:' + x + 'px;top:' + y + 'px;';
+		build(box);
+		doc.documentElement.appendChild(box);
+
+		// Keep the box inside the window.
+		const win = doc.defaultView;
+		const rect = box.getBoundingClientRect();
+		if (rect.right > win.innerWidth) box.style.left = Math.max(0, win.innerWidth - rect.width - 4) + 'px';
+		if (rect.bottom > win.innerHeight) box.style.top = Math.max(0, win.innerHeight - rect.height - 4) + 'px';
+
+		function dismiss(event) { if (!box.contains(event.target)) close(); }
+		function onKey(event) { if (event.key === 'Escape') close(); }
+		function close() {
+			doc.removeEventListener('mousedown', dismiss, true);
+			doc.removeEventListener('keydown', onKey, true);
+			box.remove();
+			if (_closeMenu === close) _closeMenu = null;
+		}
+		doc.addEventListener('mousedown', dismiss, true);
+		doc.addEventListener('keydown', onKey, true);
+		_closeMenu = close;
+		return close;
+	}
+
+	function openMenu(doc, x, y, entries) {
+		showFloating(doc, x, y, function (box) {
+			entries.forEach(function (entry) {
+				const item = el(doc, 'div');
+				item.className = 'mvz-menu-item' + (entry.disabled ? ' mvz-disabled' : '');
+				item.textContent = entry.label;
+				if (!entry.disabled) {
+					item.addEventListener('click', function () {
+						closeMenu();
+						entry.onClick();
+					});
+				}
+				box.appendChild(item);
+			});
+		});
+	}
+
+	function openVariantShortlist(doc, x, y, onSelect) {
+		showFloating(doc, x, y, function (box) {
+			const lists = [
+				{ type: 'l', token: 'MVZ_SHORTLIST_L_LABEL', values: Core.getJSONPref('languageShortlist', []) },
+				{ type: 's', token: 'MVZ_SHORTLIST_S_LABEL', values: Core.getJSONPref('scriptShortlist', []) }
+			];
+			let count = 0;
+			const columns = el(doc, 'div');
+			columns.className = 'mvz-shortlist-columns';
+			lists.forEach(function (entry) {
+				const column = el(doc, 'div');
+				const heading = el(doc, 'div');
+				heading.className = 'mvz-menu-heading';
+				heading.textContent = I18n.t(entry.token);
+				column.appendChild(heading);
+				entry.values.forEach(function (value) {
+					const tag = typeof value === 'string' ? value : value && value.tag;
+					if (!tag) return;
+					count++;
+					const option = el(doc, 'div');
+					option.className = 'mvz-menu-item';
+					option.textContent = tag;
+					option.addEventListener('click', function () {
+						closeMenu();
+						onSelect(entry.type, tag);
+					});
+					column.appendChild(option);
+				});
+				columns.appendChild(column);
+			});
+			box.appendChild(columns);
+			const help = el(doc, 'div');
+			help.className = 'mvz-menu-note';
+			help.textContent = I18n.t(count ? 'MVZ_SHORTLIST_EDIT_PREFS' : 'MVZ_SHORTLIST_EMPTY');
+			box.appendChild(help);
+		});
+	}
+
+	// -----------------------------------------------------------------
+	// Ordered list of Info-pane rows (same sequence as Zotero shows them)
 	// -----------------------------------------------------------------
 
 	function orderedFieldsForItem(item) {
@@ -157,187 +229,198 @@ Zotero.MVZ.ItemPane = (function () {
 				}
 				const label = row.querySelector('.meta-label[fieldname]');
 				const fieldName = label && label.getAttribute('fieldname');
-				if (fieldName && fieldName !== 'extra') add({ kind: 'field', name: fieldName });
+				if (fieldName && fieldName !== 'extra' && fieldName !== 'itemType') add({ kind: 'field', name: fieldName });
 			});
 		}
-		orderedFieldsForItem(item).forEach(function (name) { add({ kind: 'field', name: name }); });
+		orderedFieldsForItem(item).forEach(function (name) { if (name !== 'itemType') add({ kind: 'field', name: name }); });
 		for (let index = 0; index < creatorCount; index++) add({ kind: 'creator', index: index });
 		return entries;
+	}
+
+	// -----------------------------------------------------------------
+	// Values shown in the pane
+	// -----------------------------------------------------------------
+
+	function fieldDisplayValue(item, fieldName) {
+		const raw = String(item.getField(fieldName) || '');
+		if (raw && READ_ONLY_FIELDS.indexOf(fieldName) !== -1) {
+			try {
+				return Zotero.Date.sqlToDate(raw, true).toLocaleString();
+			} catch (e) { /* fall through to the raw value */ }
+		}
+		return raw;
+	}
+
+	function splitVariantName(value) {
+		const parts = String(value || '').split('||').map(function (part) { return part.trim(); });
+		return { last: parts[0] || '', first: parts[1] || '' };
 	}
 
 	// -----------------------------------------------------------------
 	// Rendering
 	// -----------------------------------------------------------------
 
-	function clear(container) {
-		container.textContent = '';
-	}
-
 	function renderVariantRow(doc, container, options) {
-		// options: { labelText, baseValueText, baseValueBlank, variants,
-		//   onLabelContextMenu, onBaseValueEdit, onEditVariant(variant, newValue),
-		//   onDeleteVariant(variant), onChangeVariantTag(variant) }
 		const group = el(doc, 'div');
 		group.className = 'mvz-field-group' + (options.baseValueBlank ? ' mvz-blank' : '');
 
-		function row(labelText, valueText, buttons, rowOptions) {
+		function nameInput(valueText, placeholderToken, bind, callback, readOnly) {
+			const input = el(doc, 'input');
+			input.type = 'text';
+			input.className = 'mvz-row-value';
+			if (placeholderToken) input.placeholder = I18n.t(placeholderToken);
+			input.value = valueText || '';
+			if (bind) input.setAttribute('data-mvz-bind', bind);
+			if (readOnly || !callback) input.readOnly = true;
+			else input.addEventListener('input', callback);
+			return input;
+		}
+
+		function baseRow() {
 			const r = el(doc, 'div');
 			r.className = 'mvz-row';
 
 			const label = el(doc, 'span');
-			label.className = 'mvz-row-label';
-			label.textContent = labelText || '';
-			if (rowOptions && rowOptions.onLabelContextMenu) {
+			label.className = 'mvz-row-label' + (options.onLabelClick ? ' mvz-clickable' : '');
+			label.textContent = options.labelText || '';
+			if (options.onLabelContextMenu) {
 				label.addEventListener('contextmenu', function (event) {
 					event.preventDefault();
 					event.stopPropagation();
-					rowOptions.onLabelContextMenu(event);
+					options.onLabelContextMenu(event);
 				});
 			}
-			if (rowOptions && rowOptions.onLabelClick) label.addEventListener('click', rowOptions.onLabelClick);
+			if (options.onLabelClick) {
+				label.addEventListener('click', function (event) { options.onLabelClick(event, label); });
+			}
 			r.appendChild(label);
 
-			if (rowOptions && rowOptions.creatorData) {
-				const data = rowOptions.creatorData;
-				const nameParts = rowOptions.variantValue !== undefined
-					? String(rowOptions.variantValue).split('||').map(function (part) { return part.trim(); })
-					: [data.lastName || '', data.firstName || ''];
-				const values = el(doc, 'span');
-				values.className = 'mvz-creator-values';
-				function createNameInput(valueText, placeholder, callback) {
-					const input = el(doc, 'input');
-					input.type = 'text';
-					input.className = 'mvz-row-value';
-					input.placeholder = I18n.t(placeholder);
-					input.value = valueText || '';
-					input.readOnly = !callback;
-					if (callback) input.addEventListener('input', callback);
-					values.appendChild(input);
-					return input;
-				}
-				if (data.fieldMode === 1) {
-					createNameInput(rowOptions.variantValue !== undefined ? rowOptions.variantValue : data.name, 'MVZ_CREATOR_FULL_NAME_PROMPT', function (event) {
-						rowOptions.onValueEdit(event.target.value);
-					});
+			const values = el(doc, 'span');
+			values.className = 'mvz-row-values';
+			if (options.creator) {
+				const c = options.creator;
+				if (c.fieldMode === 1) {
+					values.appendChild(nameInput(c.lastName, 'MVZ_CREATOR_FULL_NAME_PROMPT', options.bindBase + '|single', options.onCreatorEdit && function (event) {
+						options.onCreatorEdit({ single: true, last: event.target.value, first: '' });
+					}));
 				} else {
-					const lastName = createNameInput(nameParts[0], 'MVZ_CREATOR_LAST_NAME_PROMPT', function () {
-						const first = values.querySelectorAll('input')[1];
-						rowOptions.onValueEdit(lastName.value + ' || ' + first.value);
-					});
-					const firstName = createNameInput(nameParts[1], 'MVZ_CREATOR_FIRST_NAME_PROMPT', function () {
-						rowOptions.onValueEdit(lastName.value + ' || ' + firstName.value);
-					});
+					const last = nameInput(c.lastName, 'MVZ_CREATOR_LAST_NAME_PROMPT', options.bindBase + '|last');
+					const first = nameInput(c.firstName, 'MVZ_CREATOR_FIRST_NAME_PROMPT', options.bindBase + '|first');
+					const handler = options.onCreatorEdit && function () {
+						options.onCreatorEdit({ single: false, last: last.value, first: first.value });
+					};
+					if (handler) {
+						last.readOnly = false;
+						first.readOnly = false;
+						last.addEventListener('input', handler);
+						first.addEventListener('input', handler);
+					}
+					const comma = el(doc, 'span');
+					comma.className = 'mvz-comma';
+					comma.textContent = ',';
+					values.appendChild(last);
+					values.appendChild(comma);
+					values.appendChild(first);
 				}
-				r.appendChild(values);
 			} else {
-				const value = el(doc, 'input');
-				value.type = 'text';
-				value.className = 'mvz-row-value';
-				value.value = valueText || '';
-				value.readOnly = !(rowOptions && rowOptions.onValueEdit);
-				if (rowOptions && rowOptions.onValueEdit) {
-					value.addEventListener('input', function () { rowOptions.onValueEdit(value.value); });
-				}
-				if (rowOptions && rowOptions.onValueClick) value.addEventListener('click', rowOptions.onValueClick);
-				r.appendChild(value);
+				const readOnly = !options.onBaseValueEdit;
+				const input = nameInput(options.baseValueText, null, options.bindBase, options.onBaseValueEdit && function (event) {
+					options.onBaseValueEdit(event.target.value);
+				}, readOnly);
+				if (readOnly) input.classList.add('mvz-readonly');
+				if (options.onBaseValueClick) input.addEventListener('click', options.onBaseValueClick);
+				values.appendChild(input);
 			}
+			r.appendChild(values);
 
 			const btnBox = el(doc, 'span');
 			btnBox.className = 'mvz-row-buttons';
-			(buttons || []).forEach(function (b) {
+			(options.buttons || []).forEach(function (b) {
 				const btn = el(doc, 'button');
+				btn.type = 'button';
 				btn.textContent = b.text;
 				btn.title = b.title || '';
 				btn.disabled = !!b.disabled;
-				btn.addEventListener('click', b.onClick);
+				btn.addEventListener('click', function (event) { b.onClick(event, btn); });
 				btnBox.appendChild(btn);
 			});
 			r.appendChild(btnBox);
-
 			group.appendChild(r);
-			return r;
 		}
 
-		// First line: base field + (first variant, if any).
-		const first = options.variants[0] || null;
-		row(options.labelText, options.baseValueText, options.buttons || [], {
-			onLabelContextMenu: options.onLabelContextMenu,
-			onLabelClick: options.onLabelClick,
-			onValueEdit: options.onBaseValueEdit,
-			onValueClick: options.onBaseValueClick,
-			creatorData: options.creatorData
-		});
+		function variantRow(variant) {
+			const r = el(doc, 'div');
+			r.className = 'mvz-row mvz-variant-row';
 
-		if (first) renderVariantLine(doc, group, first, options);
-		options.variants.slice(1).forEach(function (v) { renderVariantLine(doc, group, v, options); });
+			const label = el(doc, 'span');
+			label.className = 'mvz-row-label mvz-variant-label mvz-clickable';
+			const tag = el(doc, 'span');
+			tag.className = 'mvz-variant-tag';
+			tag.textContent = variant.tag;
+			const type = el(doc, 'span');
+			type.className = 'mvz-variant-type';
+			type.textContent = variant.type.toUpperCase();
+			label.appendChild(tag);
+			label.appendChild(document_space(doc));
+			label.appendChild(type);
+			label.addEventListener('click', function (event) { options.onChangeVariantTag(variant, event); });
+			r.appendChild(label);
 
+			const key = (variant.field || 'creator[' + variant.creatorIndex + ']') + '|' + variant.variantIndex;
+			const values = el(doc, 'span');
+			values.className = 'mvz-row-values';
+			if (options.creator) {
+				const parts = splitVariantName(variant.value);
+				if (options.creator.fieldMode === 1) {
+					const input = nameInput(variant.value, 'MVZ_CREATOR_FULL_NAME_PROMPT', 'variant|' + key + '|all', function (event) {
+						options.onEditVariant(variant, event.target.value);
+					});
+					if (!variant.value) input.classList.add('mvz-empty-variant');
+					values.appendChild(input);
+				} else {
+					const last = nameInput(parts.last, 'MVZ_CREATOR_LAST_NAME_PROMPT', 'variant|' + key + '|last', function () {
+						options.onEditVariant(variant, last.value + ' || ' + first.value);
+					});
+					const first = nameInput(parts.first, 'MVZ_CREATOR_FIRST_NAME_PROMPT', 'variant|' + key + '|first', function () {
+						options.onEditVariant(variant, last.value + ' || ' + first.value);
+					});
+					if (!variant.value) { last.classList.add('mvz-empty-variant'); first.classList.add('mvz-empty-variant'); }
+					const comma = el(doc, 'span');
+					comma.className = 'mvz-comma';
+					comma.textContent = ',';
+					values.appendChild(last);
+					values.appendChild(comma);
+					values.appendChild(first);
+				}
+			} else {
+				const input = nameInput(variant.value, null, 'variant|' + key + '|all', function (event) {
+					options.onEditVariant(variant, event.target.value);
+				});
+				if (!variant.value) input.classList.add('mvz-empty-variant');
+				values.appendChild(input);
+			}
+			r.appendChild(values);
+
+			const btnBox = el(doc, 'span');
+			btnBox.className = 'mvz-row-buttons';
+			const del = el(doc, 'button');
+			del.type = 'button';
+			del.textContent = '-';
+			del.title = I18n.t('MVZ_DELETE_VARIANT_TOOLTIP');
+			del.addEventListener('click', function () { options.onDeleteVariant(variant); });
+			btnBox.appendChild(del);
+			r.appendChild(btnBox);
+			group.appendChild(r);
+		}
+
+		baseRow();
+		options.variants.forEach(variantRow);
 		container.appendChild(group);
 		return group;
 	}
 
-	function renderVariantLine(doc, group, variant, options) {
-		const r = el(doc, 'div');
-		r.className = 'mvz-row mvz-variant-row';
-
-		const typeLabel = el(doc, 'span');
-		typeLabel.className = 'mvz-row-label mvz-type-indicator';
-		typeLabel.textContent = variant.type.toUpperCase();
-		r.appendChild(typeLabel);
-
-		const tag = el(doc, 'span');
-		tag.className = 'mvz-row-tag mvz-clickable';
-		tag.textContent = variant.tag;
-		tag.addEventListener('click', function () { options.onChangeVariantTag(variant); });
-		r.appendChild(tag);
-
-		if (options.creatorData) {
-			const values = el(doc, 'span');
-			values.className = 'mvz-creator-values';
-			const parts = String(variant.value || '').split('||').map(function (part) { return part.trim(); });
-			function addCreatorInput(valueText, placeholder, onInput) {
-				const input = el(doc, 'input');
-				input.type = 'text';
-				input.className = 'mvz-row-value mvz-variant-value' + (valueText ? '' : ' mvz-empty-variant');
-				input.placeholder = I18n.t(placeholder);
-				input.value = valueText || '';
-				input.addEventListener('input', onInput);
-				values.appendChild(input);
-				return input;
-			}
-			if (options.creatorData.fieldMode === 1) {
-				addCreatorInput(variant.value, 'MVZ_CREATOR_FULL_NAME_PROMPT', function (event) {
-					options.onEditVariant(variant, event.target.value);
-				});
-			} else {
-				let lastName;
-				let firstName;
-				lastName = addCreatorInput(parts[0], 'MVZ_CREATOR_LAST_NAME_PROMPT', function () {
-					options.onEditVariant(variant, lastName.value + ' || ' + firstName.value);
-				});
-				firstName = addCreatorInput(parts[1], 'MVZ_CREATOR_FIRST_NAME_PROMPT', function () {
-					options.onEditVariant(variant, lastName.value + ' || ' + firstName.value);
-				});
-			}
-			r.appendChild(values);
-		} else {
-			const value = el(doc, 'input');
-			value.type = 'text';
-			value.className = 'mvz-row-value mvz-variant-value' + (variant.value ? '' : ' mvz-empty-variant');
-			value.value = variant.value;
-			value.addEventListener('input', function () { options.onEditVariant(variant, value.value); });
-			r.appendChild(value);
-		}
-
-		const del = el(doc, 'button');
-		del.className = 'mvz-row-delete';
-		del.textContent = '-';
-		del.title = I18n.t('MVZ_DELETE_VARIANT_TOOLTIP');
-		del.addEventListener('click', function () {
-			options.onDeleteVariant(variant);
-		});
-		r.appendChild(del);
-
-		group.appendChild(r);
+	function document_space(doc) {
+		return doc.createTextNode(' ');
 	}
 
 	function ensureStylesheet(doc) {
@@ -346,56 +429,69 @@ Zotero.MVZ.ItemPane = (function () {
 		link.id = 'mvz-itempane-stylesheet';
 		link.rel = 'stylesheet';
 		link.href = 'chrome://mvz/content/mvz-itempane.css';
-		// Zotero's main window is a XUL document and has no `.head` shorthand
-		// - fall back to the document root, which always exists.
 		(doc.head || doc.documentElement).appendChild(link);
+	}
+
+	function scriptOfTag(tag) {
+		const parsed = Zotero.MVZ.BCP47.parseTag(tag);
+		if (parsed.script) return parsed.script;
+		const first = String(tag).split('-')[0];
+		return Zotero.MVZ.BCP47.isValidScript(first) ? Zotero.MVZ.BCP47.formatScript(first) : null;
+	}
+
+	function primaryCreatorTypeID(item) {
+		try {
+			return Zotero.CreatorTypes.getPrimaryIDForType(Zotero.ItemTypes.getID(item.itemType));
+		} catch (e) {
+			return 1;
+		}
+	}
+
+	function structureSignature(item, state) {
+		return JSON.stringify([
+			item.itemType,
+			item.getCreators().map(function (c) { return [c.fieldMode, c.creatorTypeID]; }),
+			state.variants.map(function (v) { return [v.field, v.creatorIndex, v.type, v.tag]; }),
+			Core.isLanguageFieldClean(item.getField('language') || ''),
+			_pendingCreator.has(item.id) ? _pendingCreator.get(item.id).index : null
+		]);
 	}
 
 	function render(body, item) {
 		const doc = body.ownerDocument;
 		ensureStylesheet(doc);
-		clear(body);
+		body.textContent = '';
+		body.classList.add('mvz-pane');
 
 		if (!item || item.isNote() || item.isAttachment()) return;
 
 		const state = loadState(item);
-		_lastCreators.set(item.id, item.getCreators().map(function (c) {
-			return { firstName: c.firstName, lastName: c.lastName, name: c.name, creatorTypeID: c.creatorTypeID };
-		}));
-
-		const languageClean = Core.isLanguageFieldClean(item.getField('language') || '');
-		const creatorData = item.getCreators();
+		snapshotCreators(item);
+		const creators = item.getCreators();
+		body.__mvzSignature = structureSignature(item, state);
 
 		function persist() {
-			debouncedSave(item, state);
+			applyState(item, state);
+			scheduleSave(item);
 		}
 
-		function saveItem() {
-			item.saveTx().catch(function (e) {
-				Zotero.logError(e);
-				Zotero.alert(null, I18n.t('MVZ_SAVE_ERROR_TITLE'), I18n.t('MVZ_SAVE_ERROR_BODY', { error_message: String(e) }));
-			});
-		}
-
-		function scriptOfTag(tag) {
-			const parsed = Zotero.MVZ.BCP47.parseTag(tag);
-			if (parsed.script) return parsed.script;
-			const first = String(tag).split('-')[0];
-			return Zotero.MVZ.BCP47.isValidScript(first) ? Zotero.MVZ.BCP47.formatScript(first) : null;
+		function openAt(event, anchor) {
+			if (event && typeof event.clientX === 'number' && (event.clientX || event.clientY)) return { x: event.clientX, y: event.clientY };
+			const rect = anchor.getBoundingClientRect();
+			return { x: rect.left, y: rect.bottom };
 		}
 
 		function applyVariant(type, field, creatorIndex, tag, editingVariant) {
-			if (!languageClean) {
+			if (!Core.isLanguageFieldClean(item.getField('language') || '')) {
 				Zotero.alert(null, I18n.t('MVZ_LANGUAGE_NOT_CLEAN_TITLE'), I18n.t('MVZ_LANGUAGE_NOT_CLEAN_BODY'));
 				return;
 			}
 			const itemLanguages = (item.getField('language') || '').split(',').map(function (s) { return s.trim(); }).filter(Core.isValidItemLanguageTag);
 			const parsedTag = Zotero.MVZ.BCP47.parseTag(tag);
 
-			// "The UI must prevent adding an L-type variant for any language
-			// tag already listed in the item's Language field, or an S-type
-			// variant for any script tag matching the explicit or implied
-			// script of those item languages."
+			// "The UI must prevent adding an L-type variant for any language tag already listed
+			// in the item's Language field, or an S-type variant for any script tag matching the
+			// explicit or implied script of those item languages."
 			if (type === 'l' && itemLanguages.some(function (lt) { return Zotero.MVZ.BCP47.parseTag(lt).language === parsedTag.language; })) {
 				Zotero.alert(null, '', I18n.t('MVZ_LANGUAGE_ALREADY_IN_ITEM', { language_tag: tag }));
 				return;
@@ -417,10 +513,7 @@ Zotero.MVZ.ItemPane = (function () {
 				? variantsFor(state, null, creatorIndex)
 				: variantsFor(state, field);
 			if (existing.some(function (v) { return v !== editingVariant && v.type === type && v.tag === tag; })) {
-				Zotero.alert(null, '', I18n.t('MVZ_DUPLICATE_VARIANT', {
-					field_name: field || 'creator',
-					language_tag: tag
-				}));
+				Zotero.alert(null, '', I18n.t('MVZ_DUPLICATE_VARIANT', { field_name: field || 'creator', language_tag: tag }));
 				return;
 			}
 			if (editingVariant) {
@@ -433,12 +526,13 @@ Zotero.MVZ.ItemPane = (function () {
 			render(body, item);
 		}
 
-		function chooseVariant(field, creatorIndex, editingVariant) {
+		function chooseVariant(field, creatorIndex, editingVariant, event, anchor) {
 			if (!Core.isLanguageFieldClean(item.getField('language') || '')) {
 				Zotero.alert(null, I18n.t('MVZ_LANGUAGE_NOT_CLEAN_TITLE'), I18n.t('MVZ_LANGUAGE_NOT_CLEAN_BODY'));
 				return;
 			}
-			openVariantShortlist(doc, function (type, tag) {
+			const pos = openAt(event, anchor);
+			openVariantShortlist(doc, pos.x, pos.y, function (type, tag) {
 				applyVariant(type, field, creatorIndex, tag, editingVariant);
 			});
 		}
@@ -455,58 +549,29 @@ Zotero.MVZ.ItemPane = (function () {
 			persist();
 		}
 
-		function changeVariantTag(variant) {
-			chooseVariant(variant.field, variant.creatorIndex, variant);
+		// ---- creators ------------------------------------------------
+
+		function writeCreators(list) {
+			item.setCreators(list);
+			snapshotCreators(item);
+			applyState(item, state);
+			saveItem(item);
+			render(body, item);
 		}
 
-		function editCreator(index, value) {
-			const creator = Object.assign({}, item.getCreators()[index]);
-			if (!creator) return;
-			if (creator.fieldMode === 1) {
-				creator.name = value;
-			} else {
-				const parts = value.split('||');
-				creator.lastName = (parts[0] || '').trim();
-				creator.firstName = (parts[1] || '').trim();
-			}
-			item.setCreator(index, creator);
-			saveItem();
+		function creatorFromEdit(base, edit) {
+			const next = Object.assign({}, base);
+			next.lastName = edit.last;
+			next.firstName = edit.single ? '' : edit.first;
+			return next;
 		}
 
-		function openCreatorTypeMenu(index) {
-			let types;
-			try {
-				const itemTypeID = Zotero.ItemTypes.getID(item.itemType);
-				if (!Zotero.CreatorTypes || typeof Zotero.CreatorTypes.getTypesForItemType !== 'function') return;
-				types = Zotero.CreatorTypes.getTypesForItemType(itemTypeID);
-			} catch (e) {
-				Zotero.logError(e);
-				return;
-			}
-			if (!Array.isArray(types)) return;
-			const menu = popupShell(doc, 'MVZ_CREATOR_TYPE_MENU_TITLE');
-			menu.overlay.addEventListener('click', function (event) {
-				if (event.target === menu.overlay) menu.close();
-			});
-			types.forEach(function (entry) {
-				let typeID = typeof entry === 'number' ? entry : entry && (entry.creatorTypeID || entry.id);
-				if (typeID === undefined && typeof entry === 'string' && typeof Zotero.CreatorTypes.getID === 'function') {
-					typeID = Zotero.CreatorTypes.getID(entry);
-				}
-				if (typeID === undefined || typeID === null) return;
-				const option = el(doc, 'button');
-				option.type = 'button';
-				option.textContent = I18n.resolveCreatorType(typeID);
-				option.addEventListener('click', function () {
-					const next = Object.assign({}, item.getCreators()[index]);
-					next.creatorTypeID = typeID;
-					item.setCreator(index, next);
-					saveItem();
-					menu.close();
-					render(body, item);
-				});
-				menu.content.appendChild(option);
-			});
+		function editCreator(index, edit) {
+			const current = item.getCreators();
+			if (!current[index]) return;
+			item.setCreator(index, creatorFromEdit(current[index], edit));
+			snapshotCreators(item);
+			scheduleSave(item);
 		}
 
 		function capitalizeName(value) {
@@ -515,183 +580,305 @@ Zotero.MVZ.ItemPane = (function () {
 			});
 		}
 
-		function openCreatorContextMenu(index) {
-			const current = item.getCreators()[index];
-			const single = current.fieldMode === 1;
-			const menu = popupShell(doc, 'MVZ_CREATOR_CONTEXT_MENU_TITLE');
-			menu.overlay.addEventListener('click', function (event) {
-				if (event.target === menu.overlay) menu.close();
-			});
-			const fix = el(doc, 'button');
-			fix.type = 'button';
-			fix.textContent = I18n.t('MVZ_CREATOR_FIX_CASE');
-			const names = single ? [current.name] : [current.firstName, current.lastName];
-			fix.disabled = names.every(function (name) { return !name || capitalizeName(name) === name; });
-			fix.addEventListener('click', function () {
-				const next = Object.assign({}, current);
-				if (single) next.name = capitalizeName(next.name);
-				else {
-					next.firstName = capitalizeName(next.firstName);
-					next.lastName = capitalizeName(next.lastName);
-				}
-				item.setCreator(index, next);
-				saveItem();
-				menu.close();
-				render(body, item);
-			});
-			menu.content.appendChild(fix);
-			if (!single) {
-				const swap = el(doc, 'button');
-				swap.type = 'button';
-				swap.textContent = I18n.t('MVZ_CREATOR_SWAP_NAMES');
-				swap.addEventListener('click', function () {
-					const next = Object.assign({}, current);
-					const last = next.lastName;
-					next.lastName = next.firstName;
-					next.firstName = last;
-					item.setCreator(index, next);
-					saveItem();
-					menu.close();
-					render(body, item);
-				});
-				menu.content.appendChild(swap);
+		function creatorHasName(c) { return !!(c.firstName || c.lastName); }
+
+		function openCreatorTypeMenu(index, anchor, pending) {
+			let types;
+			try {
+				types = Zotero.CreatorTypes.getTypesForItemType(Zotero.ItemTypes.getID(item.itemType));
+			} catch (e) {
+				Zotero.logError(e);
+				return;
 			}
+			if (!Array.isArray(types)) return;
+			const rect = anchor.getBoundingClientRect();
+			const entries = [];
+			types.forEach(function (entry) {
+				let typeID = typeof entry === 'number' ? entry : entry && (entry.creatorTypeID || entry.id);
+				if (typeID === undefined && typeof entry === 'string' && typeof Zotero.CreatorTypes.getID === 'function') typeID = Zotero.CreatorTypes.getID(entry);
+				if (typeID === undefined || typeID === null) return;
+				entries.push({ label: I18n.resolveCreatorType(typeID), onClick: function () {
+					if (pending) {
+						pending.creatorTypeID = typeID;
+						render(body, item);
+						return;
+					}
+					const next = Object.assign({}, item.getCreators()[index]);
+					next.creatorTypeID = typeID;
+					item.setCreator(index, next);
+					snapshotCreators(item);
+					saveItem(item);
+					render(body, item);
+				} });
+			});
+			openMenu(doc, rect.left, rect.bottom, entries);
 		}
 
-		function creatorButtons(index, creator) {
-			const single = creator.fieldMode === 1;
+		function openCreatorContextMenu(index, anchor, pending) {
+			const current = pending || item.getCreators()[index];
+			const single = current.fieldMode === 1;
+			const names = single ? [current.lastName] : [current.firstName, current.lastName];
+			const rect = anchor.getBoundingClientRect();
+			function commit(next) {
+				if (pending) {
+					Object.assign(pending, next);
+					render(body, item);
+					return;
+				}
+				item.setCreator(index, next);
+				snapshotCreators(item);
+				saveItem(item);
+				render(body, item);
+			}
+			const entries = [{
+				label: I18n.t('MVZ_CREATOR_FIX_CASE'),
+				disabled: names.every(function (name) { return !name || capitalizeName(name) === name; }),
+				onClick: function () {
+					commit(Object.assign({}, current, { firstName: capitalizeName(current.firstName), lastName: capitalizeName(current.lastName) }));
+				}
+			}];
+			if (!single) {
+				entries.push({ label: I18n.t('MVZ_CREATOR_SWAP_NAMES'), onClick: function () {
+					commit(Object.assign({}, current, { firstName: current.lastName, lastName: current.firstName }));
+				} });
+			}
+			openMenu(doc, rect.left, rect.bottom, entries);
+		}
+
+		function toggleSingleName(index, pending) {
+			const relatedVariants = pending ? [] : variantsFor(state, null, index);
+			const base = pending || item.getCreators()[index];
+			const next = Object.assign({}, base);
+			if (base.fieldMode === 1) {
+				// single -> two fields: last word is the last name, the rest the first name
+				const words = String(base.lastName || '').trim().split(/\s+/).filter(Boolean);
+				next.lastName = words.pop() || '';
+				next.firstName = words.join(' ');
+				next.fieldMode = 0;
+				relatedVariants.forEach(function (variant) {
+					const raw = String(variant.value || '').trim();
+					if (raw.indexOf('||') !== -1) return;
+					const w = raw.split(/\s+/).filter(Boolean);
+					const last = w.pop() || '';
+					variant.value = last + ' || ' + w.join(' ');
+				});
+			} else {
+				// two fields -> single: first name, a space, last name
+				next.lastName = [base.firstName, base.lastName].filter(Boolean).join(' ');
+				next.firstName = '';
+				next.fieldMode = 1;
+				relatedVariants.forEach(function (variant) {
+					const p = splitVariantName(variant.value);
+					variant.value = [p.first, p.last].filter(Boolean).join(' ');
+				});
+			}
+			if (pending) {
+				Object.assign(pending, next);
+				render(body, item);
+				return;
+			}
+			item.setCreator(index, next);
+			snapshotCreators(item);
+			applyState(item, state);
+			saveItem(item);
+			render(body, item);
+		}
+
+		function deleteCreator(index, pending) {
+			if (pending) {
+				_pendingCreator.delete(item.id);
+				render(body, item);
+				return;
+			}
+			item.removeCreator(index, true);
+			state.variants = state.variants.filter(function (v) { return v.creatorIndex !== index; });
+			state.variants.forEach(function (v) { if (v.creatorIndex !== null && v.creatorIndex > index) v.creatorIndex -= 1; });
+			snapshotCreators(item);
+			applyState(item, state);
+			saveItem(item);
+			render(body, item);
+		}
+
+		function addCreatorAfter(index) {
+			_pendingCreator.set(item.id, {
+				index: index + 1,
+				creatorTypeID: (creators[index] && creators[index].creatorTypeID) || primaryCreatorTypeID(item),
+				lastName: '', firstName: '', fieldMode: (creators[index] && creators[index].fieldMode) || 0
+			});
+			render(body, item);
+			const rows = body.querySelectorAll('[data-mvz-pending] input');
+			if (rows[0]) rows[0].focus();
+		}
+
+		// A pending (blank) creator row becomes a real creator when focus leaves the row.
+		function commitPending(pending, row) {
+			if (!(pending.firstName || pending.lastName)) return;
+			const list = item.getCreators();
+			list.splice(pending.index, 0, {
+				fieldMode: pending.fieldMode, firstName: pending.fieldMode === 1 ? '' : pending.firstName,
+				lastName: pending.lastName, creatorTypeID: pending.creatorTypeID
+			});
+			state.variants.forEach(function (v) { if (v.creatorIndex !== null && v.creatorIndex >= pending.index) v.creatorIndex += 1; });
+			_pendingCreator.delete(item.id);
+			writeCreators(list);
+		}
+
+		function creatorButtons(index, creator, pending, soleBlank) {
+			const named = creatorHasName(creator);
 			return [
-				{ text: single ? 'Ⅱ' : '▭', title: I18n.t(single ? 'MVZ_CREATOR_SWITCH_TWO' : 'MVZ_CREATOR_SWITCH_SINGLE'), onClick: function () {
-					const next = Object.assign({}, item.getCreators()[index]);
-					const relatedVariants = variantsFor(state, null, index);
-					if (next.fieldMode === 1) {
-						const words = (next.name || '').trim().split(/\s+/).filter(Boolean);
-						next.lastName = words.pop() || '';
-						next.firstName = words.join(' ');
-						next.name = '';
-						next.fieldMode = 0;
-						relatedVariants.forEach(function (variant) {
-							const raw = String(variant.value || '').trim();
-							const parts = raw.includes('||')
-								? raw.split('||').map(function (part) { return part.trim(); })
-								: (function () {
-									const words = raw.split(/\s+/).filter(Boolean);
-									const lastName = words.pop() || '';
-									return [lastName, words.join(' ')];
-								})();
-							variant.value = (parts[0] || '') + ' || ' + (parts[1] || '');
-						});
-					} else {
-						next.name = [next.firstName, next.lastName].filter(Boolean).join(' ');
-						next.firstName = '';
-						next.lastName = '';
-						next.fieldMode = 1;
-						relatedVariants.forEach(function (variant) {
-							const parts = String(variant.value || '').split('||').map(function (part) { return part.trim(); });
-							variant.value = [parts[1] || '', parts[0] || ''].filter(Boolean).join(' ');
-						});
+				{ text: creator.fieldMode === 1 ? '\u25AF\u25AF' : '\u25AD', title: I18n.t(creator.fieldMode === 1 ? 'MVZ_CREATOR_SWITCH_TWO' : 'MVZ_CREATOR_SWITCH_SINGLE'), onClick: function () { toggleSingleName(index, pending); } },
+				{ text: '\u2296', title: I18n.t('MVZ_CREATOR_DELETE'), disabled: !named && !pending, onClick: function () { deleteCreator(index, pending); } },
+				{ text: '\u2295', title: I18n.t('MVZ_CREATOR_CREATE'), disabled: !named && !soleBlank, onClick: function () {
+					if (soleBlank) {
+						const first = body.querySelector('[data-mvz-pending] input');
+						if (first) first.focus();
+						return;
 					}
-					item.setCreator(index, next);
-					persist();
-					saveItem();
-					render(body, item);
-				}},
-				{ text: '⊖', title: I18n.t('MVZ_CREATOR_DELETE'), disabled: !(creator.firstName || creator.lastName || creator.name), onClick: function () {
-					const list = item.getCreators();
-					if (list.length === 1) {
-						list[0].firstName = '';
-						list[0].lastName = '';
-						list[0].name = '';
-						list[0].fieldMode = 0;
-						state.variants = state.variants.filter(function (variant) { return variant.creatorIndex !== index; });
-					} else {
-						list.splice(index, 1);
-						state.variants = state.variants.filter(function (variant) { return variant.creatorIndex !== index; });
-						state.variants.forEach(function (variant) {
-							if (variant.creatorIndex > index) variant.creatorIndex -= 1;
-						});
-					}
-					persist();
-					item.setCreators(list);
-					saveItem();
-					render(body, item);
-				}},
-				{ text: '⊕', title: I18n.t('MVZ_CREATOR_CREATE'), disabled: !(creator.firstName || creator.lastName || creator.name), onClick: function () {
-					const list = item.getCreators();
-					list.splice(index + 1, 0, { firstName: '', lastName: '', fieldMode: 0, creatorTypeID: creator.creatorTypeID });
-					state.variants.forEach(function (variant) {
-						if (variant.creatorIndex >= index + 1) variant.creatorIndex += 1;
-					});
-					persist();
-					item.setCreators(list);
-					saveItem();
-					render(body, item);
-				}},
-				{ text: '…', title: I18n.t('MVZ_CREATOR_CONTEXT_MENU_TOOLTIP'), onClick: function () { openCreatorContextMenu(index); } }
+					addCreatorAfter(index);
+				} },
+				{ text: '\u2026', title: I18n.t('MVZ_CREATOR_CONTEXT_MENU_TOOLTIP'), onClick: function (event, btn) { openCreatorContextMenu(index, btn, pending); } }
 			];
 		}
 
-		// --- Regular fields --------------------------------------------
+		// ---- rows ------------------------------------------------------
+
 		function renderField(fieldName) {
-			const baseValue = String(item.getField(fieldName) || '');
+			const baseValue = fieldDisplayValue(item, fieldName);
+			const readOnly = READ_ONLY_FIELDS.indexOf(fieldName) !== -1 || fieldName === 'language';
 			renderVariantRow(doc, body, {
 				labelText: I18n.resolveField(fieldName),
 				baseValueText: baseValue,
 				baseValueBlank: !baseValue,
+				bindBase: 'field|' + fieldName,
 				variants: variantsFor(state, fieldName),
-				onLabelContextMenu: function () {
+				onLabelContextMenu: function (event) {
 					if (!Core.isVariantField(fieldName)) {
 						Zotero.alert(null, '', I18n.t('MVZ_VARIANTS_UNAVAILABLE', { field_name: I18n.resolveField(fieldName) }));
 						return;
 					}
-					chooseVariant(fieldName, null, null);
+					chooseVariant(fieldName, null, null, event, body);
 				},
-				onBaseValueEdit: fieldName === 'language' ? null : Core.debounce(function (value) {
-					item.setField(fieldName, value);
-					saveItem();
+				onBaseValueEdit: readOnly ? null : Core.debounce(function (value) {
+					try {
+						item.setField(fieldName, value);
+					} catch (e) {
+						Zotero.logError(e);
+						return;
+					}
+					saveItem(item);
 				}, 300),
 				onBaseValueClick: fieldName === 'language' ? function () { onLanguageFieldFocus(doc.defaultView); } : null,
 				onEditVariant: editVariant,
 				onDeleteVariant: deleteVariant,
-				onChangeVariantTag: changeVariantTag
+				onChangeVariantTag: function (variant, event) { chooseVariant(variant.field, variant.creatorIndex, variant, event, body); }
 			});
 		}
 
-		// --- Creators -----------------------------------------------------
 		function renderCreator(index) {
-			const creator = creatorData[index];
-			const baseValue = creator.fieldMode === 1
-				? (creator.name || '')
-				: [creator.lastName, creator.firstName].filter(Boolean).join(', ');
-			let creatorTypeLabel = String(creator.creatorTypeID);
-			try { creatorTypeLabel = I18n.resolveCreatorType(creator.creatorTypeID); } catch (e) { Zotero.logError(e); }
+			const creator = creators[index];
 			renderVariantRow(doc, body, {
-				labelText: creatorTypeLabel + ' ▼',
-				baseValueText: baseValue,
-				baseValueBlank: !baseValue,
-				buttons: creatorButtons(index, creator),
-				creatorData: creator,
+				labelText: I18n.resolveCreatorType(creator.creatorTypeID) + ' \u25BC',
+				baseValueBlank: !creatorHasName(creator),
+				bindBase: 'creator|' + index,
+				creator: creator,
+				buttons: creatorButtons(index, creator, null, false),
 				variants: variantsFor(state, null, index),
-				onLabelClick: function () { openCreatorTypeMenu(index); },
-				onLabelContextMenu: function () { chooseVariant(null, index, null); },
-				onBaseValueEdit: Core.debounce(function (value) { editCreator(index, value); }, 300),
+				onLabelClick: function (event, label) { openCreatorTypeMenu(index, label, null); },
+				onLabelContextMenu: function (event) { chooseVariant(null, index, null, event, body); },
+				onCreatorEdit: Core.debounce(function (edit) { editCreator(index, edit); }, 300),
 				onEditVariant: editVariant,
 				onDeleteVariant: deleteVariant,
-				onChangeVariantTag: changeVariantTag
+				onChangeVariantTag: function (variant, event) { chooseVariant(variant.field, variant.creatorIndex, variant, event, body); }
 			});
 		}
 
+		function renderPending(pending) {
+			const group = renderVariantRow(doc, body, {
+				labelText: I18n.resolveCreatorType(pending.creatorTypeID) + ' \u25BC',
+				baseValueBlank: true,
+				bindBase: 'pending',
+				creator: pending,
+				buttons: creatorButtons(pending.index, pending, pending, creators.length === 0),
+				variants: [],
+				onLabelClick: function (event, label) { openCreatorTypeMenu(pending.index, label, pending); },
+				onLabelContextMenu: function () { Zotero.alert(null, '', I18n.t('MVZ_VARIANTS_UNAVAILABLE', { field_name: I18n.resolveCreatorType(pending.creatorTypeID) })); },
+				onCreatorEdit: function (edit) {
+					pending.lastName = edit.last;
+					pending.firstName = edit.single ? '' : edit.first;
+				}
+			});
+			group.setAttribute('data-mvz-pending', 'true');
+			group.addEventListener('focusout', function (event) {
+				if (event.relatedTarget && group.contains(event.relatedTarget)) return;
+				setTimeout(function () { if (_pendingCreator.get(item.id) === pending) commitPending(pending, group); }, 0);
+			});
+		}
+
+		// ---- Item Type, then Zotero's own sequence of fields and creators ----
+
+		const itemTypeLabel = I18n.resolveField('itemType');
 		renderVariantRow(doc, body, {
-			labelText: I18n.t('MVZ_ITEM_TYPE_LABEL'),
+			labelText: itemTypeLabel && itemTypeLabel !== 'itemType' ? itemTypeLabel : I18n.t('MVZ_ITEM_TYPE_LABEL'),
 			baseValueText: I18n.resolveItemType(item.itemType),
 			baseValueBlank: false,
+			bindBase: 'itemType',
 			variants: [],
-			onBaseValueEdit: null,
-			onLabelContextMenu: function () { Zotero.alert(null, '', I18n.t('MVZ_VARIANTS_UNAVAILABLE', { field_name: I18n.t('MVZ_ITEM_TYPE_LABEL') })); }
+			onLabelContextMenu: function () { Zotero.alert(null, '', I18n.t('MVZ_VARIANTS_UNAVAILABLE', { field_name: itemTypeLabel })); }
 		});
-		orderedInfoEntries(item, doc, creatorData.length).forEach(function (entry) {
-			if (entry.kind === 'field') renderField(entry.name);
-			else renderCreator(entry.index);
+
+		let pending = _pendingCreator.get(item.id);
+		if (!creators.length && !pending) {
+			pending = { index: 0, creatorTypeID: primaryCreatorTypeID(item), lastName: '', firstName: '', fieldMode: 0 };
+			_pendingCreator.set(item.id, pending);
+			body.__mvzSignature = structureSignature(item, state);
+		}
+
+		const entries = orderedInfoEntries(item, doc, creators.length);
+		let placed = creators.length > 0 || !pending;
+		entries.forEach(function (entry, i) {
+			if (entry.kind === 'field') {
+				renderField(entry.name);
+				// With no creators the blank row sits straight after the first field (Title).
+				if (!creators.length && pending && !placed && i === 0) { renderPending(pending); placed = true; }
+			} else {
+				if (pending && pending.index === entry.index && pending.index === 0) renderPending(pending);
+				renderCreator(entry.index);
+				if (pending && pending.index === entry.index + 1) renderPending(pending);
+			}
+		});
+		if (!creators.length && pending && !placed) renderPending(pending);
+	}
+
+	// Brings the displayed values in line with the item after a change made elsewhere
+	// (e.g. in Zotero's own Info pane), without disturbing the field being edited.
+	function syncSection(item) {
+		if (!_section || !_section.body || !_section.item || _section.item.id !== item.id) return;
+		const body = _section.body;
+		if (!body.isConnected) return;
+		const state = loadState(item);
+		if (body.__mvzSignature !== structureSignature(item, state)) {
+			if (typeof _section.refresh === 'function') _section.refresh();
+			else render(body, item);
+			return;
+		}
+		const active = body.ownerDocument.activeElement;
+		const creators = item.getCreators();
+		body.querySelectorAll('[data-mvz-bind]').forEach(function (input) {
+			if (input === active) return;
+			const bind = input.getAttribute('data-mvz-bind').split('|');
+			let value = null;
+			if (bind[0] === 'field') {
+				value = fieldDisplayValue(item, bind[1]);
+			} else if (bind[0] === 'creator') {
+				const c = creators[parseInt(bind[1], 10)];
+				if (c) value = bind[2] === 'first' ? c.firstName : c.lastName;
+			} else if (bind[0] === 'variant') {
+				const v = state.variants.find(function (candidate) {
+					return ((candidate.field || 'creator[' + candidate.creatorIndex + ']') + '|' + candidate.variantIndex) === bind[1] + '|' + bind[2];
+				});
+				if (v) value = bind[3] === 'last' ? splitVariantName(v.value).last : bind[3] === 'first' ? splitVariantName(v.value).first : v.value;
+			}
+			if (value !== null && input.value !== value) input.value = value;
 		});
 	}
 
@@ -705,45 +892,53 @@ Zotero.MVZ.ItemPane = (function () {
 			return;
 		}
 		try {
-			// BUG FIX (TEST_REPORT_Alpha.1.md, "Right toolbar icon ... smaller
-			// image is required" / "Main pane ... just a 'Z' on blue
-			// background"): the 64x64 install icon is too large for the pane
-			// header / side-nav row and was apparently rejected/falling back
-			// to Zotero's default icon. Use the dedicated smaller icons the
-			// developer added under /src/images instead.
-			Zotero.ItemPaneManager.registerSection({
+			// Icons must be chrome:// URLs; the 16 px icon is used for both the header and the
+			// side navigation (TEST_REPORT_Alpha.3 test 203: the larger icon looked cropped).
+			_sectionID = Zotero.ItemPaneManager.registerSection({
 				paneID: PANE_ID,
 				pluginID: PLUGIN_ID,
 				header: {
 					l10nID: 'MVZ_PANE_TITLE',
-					icon: 'chrome://mvz/content/icon32.png'
+					icon: 'chrome://mvz/content/icon16.png'
 				},
 				sidenav: {
 					l10nID: 'MVZ_PANE_SECTION_TOOLTIP',
 					icon: 'chrome://mvz/content/icon16.png'
 				},
+				onInit: function (props) {
+					_section = { body: props.body, item: props.item, refresh: props.refresh };
+				},
 				onRender: function (props) {
 					try {
+						_section = { body: props.body, item: props.item, refresh: (_section && _section.refresh) || null };
 						render(props.body, props.item);
 					} catch (e) {
 						Zotero.logError(e);
-						// Surface failures visibly rather than leaving a silent
-						// blank/grey pane (see TEST_REPORT_Alpha.1.md) - much
-						// easier to diagnose from a live install than digging
-						// through the hidden Zotero debug output log.
 						try {
 							props.body.textContent = 'MVZ error: ' + (e && e.message ? e.message : String(e));
 						} catch (e2) { /* ignore - body itself may be unusable */ }
 					}
 				}
 			});
+			if (!_sectionID) Zotero.logError(new Error('MVZ: registerSection returned no ID (a section with the same paneID may already be registered).'));
 		} catch (e) {
 			Zotero.logError(e);
 		}
 	}
 
+	function unregisterPane() {
+		try {
+			if (_sectionID) Zotero.ItemPaneManager.unregisterSection(_sectionID);
+		} catch (e) {
+			Zotero.logError(e);
+		}
+		_sectionID = null;
+		_section = null;
+		closeMenu();
+	}
+
 	// -----------------------------------------------------------------
-	// Creator listener (SPECIFICATION > "Creator listener")
+	// Creator listener (SPECIFICATION > "Creator listener") + pane synchronisation
 	// -----------------------------------------------------------------
 
 	let _creatorObserverID = null;
@@ -752,7 +947,15 @@ Zotero.MVZ.ItemPane = (function () {
 		_creatorObserverID = Zotero.Notifier.registerObserver({
 			notify: function (event, type, ids) {
 				if (event !== 'modify' || type !== 'item') return;
-				ids.forEach(handleItemModified);
+				ids.forEach(function (id) {
+					handleItemModified(id);
+					try {
+						const item = Zotero.Items.get(id);
+						if (item) syncSection(item);
+					} catch (e) {
+						Zotero.logError(e);
+					}
+				});
 			}
 		}, ['item'], 'mvz-creator-listener');
 	}
@@ -772,17 +975,12 @@ Zotero.MVZ.ItemPane = (function () {
 			if (!previous) return; // Never rendered/cached - nothing to diff.
 
 			const current = item.getCreators();
-			_lastCreators.set(itemID, current.map(function (c) {
-				return { firstName: c.firstName, lastName: c.lastName, name: c.name, creatorTypeID: c.creatorTypeID };
-			}));
+			snapshotCreators(item);
 
 			if (current.length >= previous.length) return; // Not a deletion.
 
-			// Find the first index whose previous creator has no matching
-			// counterpart at the same or later position in the new list -
-			// i.e. the deleted index. A simple positional diff suffices for
-			// the common "a single creator was removed" case described in
-			// the specification.
+			// Find the first index whose previous creator differs from the new one at the same
+			// position - i.e. the deleted index (single-removal case described in the specification).
 			let deletedIndex = previous.length - 1;
 			for (let i = 0; i < current.length; i++) {
 				if (!sameCreator(previous[i], current[i])) {
@@ -798,10 +996,7 @@ Zotero.MVZ.ItemPane = (function () {
 			state.variants.forEach(function (v) {
 				if (v.creatorIndex !== null && v.creatorIndex > deletedIndex) v.creatorIndex -= 1;
 			});
-			saveState(item, state).catch(function (e) {
-				Zotero.logError(e);
-				Zotero.alert(null, I18n.t('MVZ_CREATOR_SYNC_ERROR_TITLE'), I18n.t('MVZ_CREATOR_SYNC_ERROR_BODY', { error_message: String(e) }));
-			});
+			saveState(item, state);
 		} catch (e) {
 			Zotero.logError(e);
 			Zotero.alert(null, I18n.t('MVZ_CREATOR_SYNC_ERROR_TITLE'), I18n.t('MVZ_CREATOR_SYNC_ERROR_BODY', { error_message: String(e) }));
@@ -810,14 +1005,17 @@ Zotero.MVZ.ItemPane = (function () {
 
 	function sameCreator(a, b) {
 		if (!a || !b) return false;
-		return a.firstName === b.firstName && a.lastName === b.lastName && a.name === b.name;
+		return a.firstName === b.firstName && a.lastName === b.lastName && a.creatorTypeID === b.creatorTypeID;
 	}
 
 	// -----------------------------------------------------------------
 	// Extra field popup (SPECIFICATION > "Extra field popup")
 	// -----------------------------------------------------------------
 
-	const _extraCache = new Map(); // itemID -> cached mvz/ variants text, while the warning is up.
+	const _extraCache = new Map(); // itemID -> cached mvz/ variants, while the Extra field is being edited.
+	const _extraWarningOpen = new Set();
+	const _languagePopupOpen = new Set();
+	const _installedWindows = []; // { doc, onFocusIn, onFocusOut }
 
 	function _findFieldRow(doc, fieldName) {
 		const control = doc.querySelector('editable-text[fieldname="' + fieldName + '"]');
@@ -827,23 +1025,31 @@ Zotero.MVZ.ItemPane = (function () {
 	function installFieldPopups(mainWindow) {
 		const doc = mainWindow.document;
 
-		doc.addEventListener('focusin', function (ev) {
+		function onFocusIn(ev) {
 			const extraRow = _findFieldRow(doc, 'extra');
-			if (extraRow && extraRow.contains(ev.target)) {
-				onExtraFieldFocus(mainWindow);
-			}
+			if (extraRow && extraRow.contains(ev.target)) onExtraFieldFocus(mainWindow);
 			const langRow = _findFieldRow(doc, 'language');
 			if (langRow && langRow.contains(ev.target)) {
-				onLanguageFieldFocus(mainWindow);
+				// Take focus out of the native field, otherwise the user could keep typing in it
+				// and its stale value would overwrite what the popup saves (TEST_REPORT_Alpha.3 804/809).
+				try { ev.target.blur(); } catch (e) { /* ignore */ }
+				setTimeout(function () { onLanguageFieldFocus(mainWindow); }, 0);
 			}
-		}, true);
-
-		doc.addEventListener('focusout', function (ev) {
+		}
+		function onFocusOut(ev) {
 			const extraRow = _findFieldRow(doc, 'extra');
-			if (extraRow && extraRow.contains(ev.target)) {
-				onExtraFieldBlur(mainWindow, ev.target);
-			}
-		}, true);
+			if (extraRow && extraRow.contains(ev.target)) onExtraFieldBlur(mainWindow, ev.target);
+		}
+		doc.addEventListener('focusin', onFocusIn, true);
+		doc.addEventListener('focusout', onFocusOut, true);
+		_installedWindows.push({ doc: doc, onFocusIn: onFocusIn, onFocusOut: onFocusOut });
+	}
+
+	function uninstallFieldPopups() {
+		_installedWindows.splice(0).forEach(function (entry) {
+			entry.doc.removeEventListener('focusin', entry.onFocusIn, true);
+			entry.doc.removeEventListener('focusout', entry.onFocusOut, true);
+		});
 	}
 
 	function currentItem(mainWindow) {
@@ -854,18 +1060,17 @@ Zotero.MVZ.ItemPane = (function () {
 		}
 	}
 
-	const _extraWarningOpen = new Set();
-	const _languagePopupOpen = new Set();
-
 	function popupShell(doc, titleToken) {
 		const overlay = el(doc, 'div');
 		overlay.className = 'mvz-modal-overlay';
 		const dialog = el(doc, 'div');
 		dialog.className = 'mvz-modal-dialog';
-		const title = el(doc, 'h3');
-		title.textContent = I18n.t(titleToken);
+		if (titleToken) {
+			const title = el(doc, 'h3');
+			title.textContent = I18n.t(titleToken);
+			dialog.appendChild(title);
+		}
 		const content = el(doc, 'div');
-		dialog.appendChild(title);
 		dialog.appendChild(content);
 		overlay.appendChild(dialog);
 		doc.documentElement.appendChild(overlay);
@@ -948,10 +1153,12 @@ Zotero.MVZ.ItemPane = (function () {
 		save.type = 'button';
 		save.textContent = I18n.t('MVZ_OK_BUTTON');
 		save.addEventListener('click', function () {
-			item.setField('language', tags.join(', '));
-			item.saveTx().catch(function (e) { Zotero.logError(e); });
 			popup.close();
 			onClose();
+			item.setField('language', tags.join(', '));
+			saveItem(item).then(function () {
+				if (_section && _section.item && _section.item.id === item.id) syncSection(item);
+			});
 		});
 		const cancel = el(doc, 'button');
 		cancel.type = 'button';
@@ -967,9 +1174,11 @@ Zotero.MVZ.ItemPane = (function () {
 
 	return {
 		registerPane: registerPane,
+		unregisterPane: unregisterPane,
 		registerCreatorListener: registerCreatorListener,
 		unregisterCreatorListener: unregisterCreatorListener,
 		installFieldPopups: installFieldPopups,
+		uninstallFieldPopups: uninstallFieldPopups,
 		render: render
 	};
 })();

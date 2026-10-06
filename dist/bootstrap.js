@@ -12,7 +12,6 @@ var chromeHandle = null;
 var mainWindowListener = null;
 
 const PLUGIN_ID = 'multi-variant-zotero@andysymons.github.io';
-const LOCALES = ['en-GB', 'pt-PT'];
 
 function log(msg) {
 	try { Zotero.debug('MVZ: ' + msg); } catch (e) { /* Zotero not ready yet */ }
@@ -43,30 +42,13 @@ function installDefaultPrefs(rootURI) {
 	Services.scriptloader.loadSubScript(rootURI + 'prefs.js', sandbox);
 }
 
-function registerChromeAndLocale(rootURI) {
+function registerChromeContent(rootURI) {
+	// Only the content/ package is registered (no chrome.manifest, no locale registration):
+	// Zotero's UI loads icons and stylesheets only from chrome:// URLs, whereas jar: rootURI
+	// paths failed in test.2. Locale (.ftl) files are read directly from rootURI.
 	const aomStartup = Components.classes['@mozilla.org/addons/addon-manager-startup;1']
 		.getService(Components.interfaces.amIAddonManagerStartup);
-	const manifestURI = Services.io.newURI(rootURI + 'manifest.json');
-
-	const chromeEntries = [
-		['content', 'mvz', 'content/']
-	];
-	LOCALES.forEach(function (locale) {
-		chromeEntries.push(['locale', 'mvz', locale, 'locale/' + locale + '/']);
-	});
-
-	chromeHandle = aomStartup.registerChrome(manifestURI, chromeEntries);
-
-	// Register the Fluent source so `new Localization(['mvz.ftl'])` (see
-	// mvz-i18n.js) and any `data-l10n-id` bindings in preferences.xhtml can
-	// resolve MVZ messages, in the Zotero UI's current locale.
-	try {
-		const { L10nRegistry, L10nFileSource } = ChromeUtils.importESModule('resource://gre/modules/L10nRegistry.sys.mjs');
-		const source = new L10nFileSource('mvz', 'mvz', LOCALES, rootURI + 'locale/{locale}/');
-		L10nRegistry.getInstance().registerSources([source]);
-	} catch (e) {
-		log('Could not register Fluent locale source: ' + e);
-	}
+	chromeHandle = aomStartup.registerChrome(Services.io.newURI(rootURI + 'manifest.json'), [['content', 'mvz', 'content/']]);
 }
 
 function loadContentScripts(rootURI) {
@@ -87,6 +69,8 @@ function loadContentScripts(rootURI) {
 
 function onMainWindowLoad(window) {
 	try {
+		// Lets Fluent-bound text (item pane header/tooltip l10nIDs) resolve from locale/<locale>/mvz.ftl.
+		window.MozXULElement.insertFTLIfNeeded('mvz.ftl');
 		Zotero.MVZ.ItemPane.installFieldPopups(window);
 	} catch (e) {
 		Zotero.logError(e);
@@ -96,8 +80,10 @@ function onMainWindowLoad(window) {
 function install() { /* no-op for restartless plugins */ }
 
 async function startup({ id, version, rootURI }) {
+	if (!Zotero.MVZ) Zotero.MVZ = {};
+	Zotero.MVZ.rootURI = rootURI;
 	installDefaultPrefs(rootURI);
-	registerChromeAndLocale(rootURI);
+	registerChromeContent(rootURI);
 	loadContentScripts(rootURI);
 
 	Zotero.MVZ.I18n.init();
@@ -107,21 +93,16 @@ async function startup({ id, version, rootURI }) {
 
 	if (Zotero.PreferencePanes && typeof Zotero.PreferencePanes.register === 'function') {
 		try {
-			// BUG FIX (TEST_REPORT_Alpha.1.md, "Settings ... Does not display
-			// MVZ preferences at all"): a <script src="..."> tag embedded in
-			// the preferences.xhtml fragment does NOT execute - Zotero loads
-			// `src` as an inert markup fragment and inserts it into the
-			// preferences document, which never runs embedded <script>
-			// elements. The `scripts` option below is the mechanism Zotero
-			// actually provides for attaching pane behaviour; the inline
-			// <script> tag has been removed from preferences.xhtml.
+			// Zotero loads `scripts` BEFORE the pane markup is inserted (see mvz-prefs.js) and
+			// parses `src` as an XHTML fragment wrapped in a <div>, so the fragment must not
+			// start with an XML declaration (TEST_REPORT_Alpha.3 test 303; test.3 panes 3-3/3-4).
 			await Zotero.PreferencePanes.register({
 				pluginID: PLUGIN_ID,
 				src: 'chrome://mvz/content/preferences.xhtml',
 				scripts: ['chrome://mvz/content/mvz-prefs.js'],
 				stylesheets: ['chrome://mvz/content/mvz-preferences.css'],
 				label: 'MVZ Plugin',
-				image: 'chrome://mvz/content/icon.png'
+				image: 'chrome://mvz/content/icon16.png'
 			});
 		} catch (e) {
 			Zotero.logError(e);
@@ -157,6 +138,8 @@ function shutdown() {
 		}
 		if (Zotero.MVZ && Zotero.MVZ.ItemPane) {
 			Zotero.MVZ.ItemPane.unregisterCreatorListener();
+			Zotero.MVZ.ItemPane.unregisterPane();
+			Zotero.MVZ.ItemPane.uninstallFieldPopups();
 		}
 		if (chromeHandle) {
 			chromeHandle.destruct();
